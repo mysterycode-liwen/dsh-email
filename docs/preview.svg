@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="Mail panel preview">
+  <rect width="640" height="300" fill="#f4f6fb"/>
+  <rect x="24" y="24" width="592" height="252" rx="12" fill="#ffffff" stroke="#d9dfeb"/>
+  <rect x="24" y="24" width="592" height="44" rx="12" fill="#eef3fc"/>
+  <circle cx="48" cy="46" r="6" fill="#3b82f6"/>
+  <text x="64" y="51" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#1f2a44">Mail</text>
+  <rect x="24" y="68" width="160" height="208" fill="#fafbfe"/>
+  <rect x="40" y="84" width="128" height="30" rx="6" fill="#e6edfb"/>
+  <text x="52" y="103" font-family="system-ui,sans-serif" font-size="12" fill="#3451a3">Accounts</text>
+  <rect x="40" y="124" width="128" height="30" rx="6" fill="#ffffff" stroke="#d9dfeb"/>
+  <text x="52" y="143" font-family="system-ui,sans-serif" font-size="12" fill="#1f2a44">Inbox</text>
+  <rect x="200" y="84" width="396" height="44" rx="8" fill="#ffffff" stroke="#d9dfeb"/>
+  <text x="214" y="111" font-family="system-ui,sans-serif" font-size="13" fill="#1f2a44">Project update</text>
+  <text x="214" y="126" font-family="system-ui,sans-serif" font-size="10" fill="#7b86a0">alice@example.com · today</text>
+  <rect x="200" y="136" width="396" height="44" rx="8" fill="#ffffff" stroke="#d9dfeb"/>
+  <text x="214" y="163" font-family="system-ui,sans-serif" font-size="13" fill="#1f2a44">Re: Meeting notes</text>
+  <text x="214" y="178" font-family="system-ui,sans-serif" font-size="10" fill="#7b86a0">bob@example.com · yesterday</text>
+  <rect x="200" y="188" width="396" height="72" rx="8" fill="#f8faff" stroke="#d9dfeb"/>
+  <rect x="528" y="200" width="56" height="24" rx="6" fill="#3b82f6"/>
+  <text x="540" y="216" font-family="system-ui,sans-serif" font-size="11" fill="#ffffff">Compose</text>
+</svg>

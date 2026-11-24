@@ -1,0 +1,209 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+
+const execFileAsync = promisify(execFile);
+const BRIDGE_PATH = fileURLToPath(new URL('./bridge.py', import.meta.url));
+
+export const inject = ['connection', 'credentials'];
+
+const API = '/api/dsh-mail';
+
+function candidatePythons() {
+  return [
+    process.env.MAIL_PYTHON,
+    'C:\\Python314\\python.exe',
+    'C:\\Python313\\python.exe',
+    'C:\\Python312\\python.exe',
+    'C:\\Python311\\python.exe',
+    'C:\\Python310\\python.exe',
+    'python',
+  ].filter(Boolean);
+}
+
+function findPython() {
+  for (const candidate of candidatePythons()) {
+    if (candidate === 'python' || existsSync(candidate)) return candidate;
+  }
+  return 'python';
+}
+
+async function runBridge(op, extra = {}) {
+  const request = JSON.stringify({ op, ...extra });
+  const { stdout } = await execFileAsync(findPython(), [BRIDGE_PATH], {
+    env: { ...process.env, MAIL_REQUEST: request },
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 90000,
+  });
+  const text = String(stdout).trim();
+  if (!text) return { ok: false, error: 'bridge returned empty output' };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'bridge returned invalid JSON: ' + text.slice(0, 200) };
+  }
+}
+
+function accountId(seed) {
+  let h = 2166136261;
+  for (const ch of String(seed)) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return 'acct-' + h.toString(16).padStart(8, '0');
+}
+
+function recordKey(id) {
+  return 'mail/' + id;
+}
+
+function publicAccount(id, payload) {
+  return {
+    id,
+    name: payload.name || payload.username,
+    username: payload.username,
+    imapHost: payload.imapHost,
+    imapPort: payload.imapPort,
+    smtpHost: payload.smtpHost,
+    smtpPort: payload.smtpPort,
+    imapTls: payload.imapTls !== false,
+    smtpTls: payload.smtpTls !== false,
+  };
+}
+
+async function listAccounts(ctx) {
+  const entries = await ctx.credentials.listRecords();
+  const accounts = [];
+  for (const entry of entries) {
+    const key = String(entry.key);
+    if (!key.startsWith('mail/')) continue;
+    const id = key.slice(5);
+    const record = await ctx.credentials.readRecord(key);
+    if (!record || record.kind !== 'grant' || typeof record.payload !== 'object' || record.payload === null) continue;
+    accounts.push(publicAccount(id, record.payload));
+  }
+  return accounts.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+async function getAccountPayload(ctx, id) {
+  const record = await ctx.credentials.readRecord(recordKey(id));
+  if (!record || record.kind !== 'grant' || typeof record.payload !== 'object' || record.payload === null) {
+    throw new Error('account not found: ' + id);
+  }
+  return record.payload;
+}
+
+function bridgeAccount(payload) {
+  return {
+    username: payload.username,
+    authCode: payload.authCode,
+    imapHost: payload.imapHost,
+    imapPort: Number(payload.imapPort) || 993,
+    smtpHost: payload.smtpHost,
+    smtpPort: Number(payload.smtpPort) || 465,
+    imapTls: payload.imapTls !== false,
+    smtpTls: payload.smtpTls !== false,
+  };
+}
+
+function json(result, status = 200) {
+  return new Response(JSON.stringify(result), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
+}
+
+async function handleRequest(ctx, request) {
+  const url = new URL(request.url);
+  let body = {};
+  if (request.method === 'POST') {
+    try {
+      body = await request.json();
+    } catch {
+      return json({ ok: false, error: 'invalid JSON body' }, 400);
+    }
+  }
+  const op = body.op || url.searchParams.get('op');
+  try {
+    switch (op) {
+      case 'listAccounts':
+        return json({ ok: true, accounts: await listAccounts(ctx) });
+      case 'saveAccount': {
+        const username = String(body.username || '').trim();
+        if (!username) return json({ ok: false, error: 'username is required' }, 400);
+        const authCode = String(body.authCode || '');
+        if (!authCode) return json({ ok: false, error: 'authCode is required' }, 400);
+        const id = body.id || accountId(username.toLowerCase());
+        const payload = {
+          name: String(body.name || username).trim(),
+          username,
+          authCode,
+          imapHost: String(body.imapHost || '').trim(),
+          imapPort: Number(body.imapPort) || 993,
+          smtpHost: String(body.smtpHost || '').trim(),
+          smtpPort: Number(body.smtpPort) || 465,
+          imapTls: body.imapTls !== false,
+          smtpTls: body.smtpTls !== false,
+        };
+        if (!payload.imapHost) return json({ ok: false, error: 'imapHost is required' }, 400);
+        if (!payload.smtpHost) return json({ ok: false, error: 'smtpHost is required' }, 400);
+        await ctx.credentials.modifyRecord(recordKey(id), async () => ({
+          kind: 'grant',
+          payload,
+        }));
+        return json({ ok: true, account: publicAccount(id, payload) });
+      }
+      case 'deleteAccount': {
+        const id = String(body.id || '');
+        if (!id) return json({ ok: false, error: 'id is required' }, 400);
+        await ctx.credentials.deleteRecord(recordKey(id));
+        return json({ ok: true });
+      }
+      case 'testAccount': {
+        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        return json(await runBridge('test', { account: bridgeAccount(payload) }));
+      }
+      case 'listMessages': {
+        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        return json(await runBridge('listMessages', {
+          account: bridgeAccount(payload),
+          folder: body.folder || 'INBOX',
+          limit: Number(body.limit) || 20,
+        }));
+      }
+      case 'getMessage': {
+        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        return json(await runBridge('getMessage', {
+          account: bridgeAccount(payload),
+          uid: String(body.uid || ''),
+          folder: body.folder || 'INBOX',
+        }));
+      }
+      case 'sendMessage': {
+        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        const to = String(body.to || '').trim();
+        if (!to) return json({ ok: false, error: 'to is required' }, 400);
+        return json(await runBridge('sendMessage', {
+          account: bridgeAccount(payload),
+          to,
+          subject: String(body.subject || ''),
+          body: String(body.body || ''),
+        }));
+      }
+      default:
+        return json({ ok: false, error: 'unknown op: ' + op }, 400);
+    }
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+export function apply(ctx) {
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: API,
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: (request) => handleRequest(ctx, request),
+  }), 'dsh-mail: fetch route');
+}

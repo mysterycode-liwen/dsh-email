@@ -1,0 +1,60 @@
+{
+  "name": "@mysterycode-liwen/dsh-mail",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "DeepSeek Harness 侧边栏邮件插件：在左侧栏收发 QQ / 163 / Gmail 等邮箱，IMAP 收信 + SMTP 发信，授权码保存在本机凭据保险箱。",
+  "license": "MIT",
+  "author": "李文 <59386344+mysterycode-liwen@users.noreply.github.com>",
+  "homepage": "https://github.com/mysterycode-liwen/dsh-email#readme",
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "email",
+    "mail",
+    "imap",
+    "smtp",
+    "qq-mail"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mysterycode-liwen/dsh-email.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mysterycode-liwen/dsh-email/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./bridge.py": "./bridge.py",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "bridge.py",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "scripts": {
+    "check": "node scripts/check-package.mjs",
+    "prepublishOnly": "node scripts/check-package.mjs"
+  }
+}

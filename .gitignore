@@ -1,0 +1,19 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# DSH vision-router scratch artifacts
+.dsh-vision-router/
+
+# Local scratch / validation scripts
+.v.*
+.test_*
+
+# Node
+node_modules/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
