@@ -58,6 +58,35 @@ function recordKey(id) {
   return 'mail/' + id;
 }
 
+function outboxKey(id) {
+  return 'mail-outbox/' + id;
+}
+
+function contactsKey(id) {
+  return 'mail-contacts/' + id;
+}
+
+// Read a plain JSON payload record (kind 'grant') from the credential store, returning
+// a fallback when it does not exist yet. Account-specific data lives under a
+// key derived from the account id, so switching accounts never mixes data.
+async function readData(ctx, key, fallback) {
+  try {
+    const record = await ctx.credentials.readRecord(key);
+    if (record && (record.kind === 'grant' || record.kind === 'data') && record.payload && typeof record.payload === 'object') {
+      return record.payload;
+    }
+  } catch {
+    // First use: the record simply does not exist.
+  }
+  return fallback;
+}
+
+async function writeData(ctx, key, payload) {
+  await ctx.credentials.modifyRecord(key, async () => ({ kind: 'grant', payload }));
+}
+
+// Contacts are stored locally only (per account in the credential store);
+// they are never written to the IMAP server.
 function publicAccount(id, payload) {
   return {
     id,
@@ -181,15 +210,90 @@ async function handleRequest(ctx, request) {
         }));
       }
       case 'sendMessage': {
-        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        const id = String(body.id || '');
+        const payload = await getAccountPayload(ctx, id);
         const to = String(body.to || '').trim();
         if (!to) return json({ ok: false, error: 'to is required' }, 400);
-        return json(await runBridge('sendMessage', {
+        const result = await runBridge('sendMessage', {
           account: bridgeAccount(payload),
           to,
           subject: String(body.subject || ''),
           body: String(body.body || ''),
-        }));
+          attachments: Array.isArray(body.attachments) ? body.attachments : [],
+        });
+        if (result.ok) {
+          // Keep a local outbox record as an instant, offline-capable mirror of
+          // the IMAP Sent folder. The outbox is per-account (key includes id).
+          try {
+            const store = await readData(ctx, outboxKey(id), { sent: [] });
+            const list = Array.isArray(store.sent) ? store.sent : [];
+            list.unshift({
+              id: String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8),
+              to,
+              subject: String(body.subject || ''),
+              body: String(body.body || ''),
+              date: new Date().toISOString(),
+            });
+            await writeData(ctx, outboxKey(id), { sent: list.slice(0, 200) });
+          } catch {
+            // Local mirror must never fail an already-delivered message.
+          }
+        }
+        return json(result);
+      }
+      case 'sentMessages': {
+        const id = String(body.id || '');
+        const payload = await getAccountPayload(ctx, id);
+        // Read Sent from the mail server so mails sent on other devices show up.
+        try {
+          const r = await runBridge('listSent', { account: bridgeAccount(payload), limit: 50 });
+          if (r && r.ok && Array.isArray(r.messages)) {
+            const sent = r.messages.map(m => ({
+              id: m.id || ((m.folder || '') + ':' + m.uid),
+              to: m.to || '',
+              subject: m.subject || '',
+              body: m.snippet || '',
+              date: m.date || '',
+              from: m.from || '',
+              uid: m.uid || '',
+              folder: m.folder || '',
+            }));
+            try { await writeData(ctx, outboxKey(id), { sent }); } catch {}
+            return json({ ok: true, sent });
+          }
+        } catch {
+          // Fall through to the local cache below.
+        }
+        const store = await readData(ctx, outboxKey(id), { sent: [] });
+        return json({ ok: true, sent: Array.isArray(store.sent) ? store.sent : [] });
+      }
+      case 'listContacts': {
+        const id = String(body.id || '');
+        const store = await readData(ctx, contactsKey(id), { contacts: [] });
+        return json({ ok: true, contacts: Array.isArray(store.contacts) ? store.contacts : [] });
+      }
+      case 'saveContact': {
+        const id = String(body.id || '');
+        const email = String(body.email || '').trim().toLowerCase();
+        if (!email || !email.includes('@')) return json({ ok: false, error: 'valid email is required' }, 400);
+        const emailLower = c => String(c.email || '').toLowerCase();
+        const store = await readData(ctx, contactsKey(id), { contacts: [] });
+        const list = Array.isArray(store.contacts) ? store.contacts.slice() : [];
+        const existing = list.find(c => emailLower(c) === email);
+        if (existing) existing.name = String(body.name || existing.name || '');
+        else list.push({ email, name: String(body.name || '') });
+        list.sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email)));
+        await writeData(ctx, contactsKey(id), { contacts: list });
+        return json({ ok: true, contacts: list });
+      }
+      case 'deleteContact': {
+        const id = String(body.id || '');
+        const email = String(body.email || '').trim().toLowerCase();
+        const store = await readData(ctx, contactsKey(id), { contacts: [] });
+        const list = (Array.isArray(store.contacts) ? store.contacts : [])
+          .filter(c => String(c.email || '').toLowerCase() !== email);
+        await writeData(ctx, contactsKey(id), { contacts: list });
+        return json({ ok: true, contacts: list });
       }
       default:
         return json({ ok: false, error: 'unknown op: ' + op }, 400);
