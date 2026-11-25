@@ -44,6 +44,7 @@ window.__ModuleLoader__.load({
 
     const zh = {
       label: '邮件',
+      badgeTitle: '有新邮件',
       accounts: '账号',
       addAccount: '添加账号',
       noAccounts: '还没有账号，添加一个即可开始收发邮件。',
@@ -161,6 +162,7 @@ window.__ModuleLoader__.load({
     };
     const en = {
       label: 'Mail',
+      badgeTitle: 'New mail',
       accounts: 'Accounts',
       addAccount: 'Add account',
       noAccounts: 'No accounts yet. Add one to start sending and receiving mail.',
@@ -460,6 +462,29 @@ window.__ModuleLoader__.load({
       },
     };
 
+    // Unread badge on the sidebar entry. Kept at module scope because the
+    // shell renders Icon inside its own button (not as part of MailPanel), so
+    // the badge must survive the panel being closed. The background poller
+    // increments it; Icon subscribes; opening the panel clears it.
+    const BADGE = {
+      count: 0,
+      listeners: new Set(),
+      get() { return this.count; },
+      subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+      emit() { for (const fn of this.listeners) { try { fn(this.count); } catch { /* dead listener */ } } },
+      add(n) {
+        n = Math.max(0, Number(n) || 0);
+        if (!n) return;
+        this.count += n;
+        this.emit();
+      },
+      clear() {
+        if (!this.count) return;
+        this.count = 0;
+        this.emit();
+      },
+    };
+
     // A mail that arrived while DSH was restarting must not be swallowed by
     // baseline seeding. On first sight we still alert on unseen messages whose
     // Date header is within this window.
@@ -680,6 +705,7 @@ window.__ModuleLoader__.load({
               );
               NOTIFY.diag.alerts += 1;
               NOTIFY.diag.lastAlert = Date.now();
+              BADGE.add(recent.length);
               if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
               continue;
             }
@@ -695,6 +721,7 @@ window.__ModuleLoader__.load({
               );
               NOTIFY.diag.alerts += 1;
               NOTIFY.diag.lastAlert = Date.now();
+              BADGE.add(fresh.length);
               if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
             }
           } catch (e) {
@@ -728,10 +755,30 @@ window.__ModuleLoader__.load({
     }
 
     // Solid envelope for the sidebar panel icon (the sidebar draws its own
-    // button; this component only renders the glyph).
-    function Icon({ size, active }) {
-      return h('svg', { viewBox: '0 0 24 24', width: size || 20, height: size || 20, 'aria-hidden': true, style: { display: 'block' } },
+    // button; this component renders the glyph plus the unread badge).
+    function Icon(props) {
+      const size = (props && props.size) || 20;
+      const active = !!(props && props.active);
+      const [count, setCount] = useState(() => BADGE.get());
+      useEffect(() => BADGE.subscribe(setCount), []);
+      const glyph = h('svg', { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': true, style: { display: 'block' } },
         h('path', { fill: active ? 'var(--dsw-alias-brand-primary)' : 'currentColor', d: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm9 8.2L4.2 7h15.6L12 13.2zM4 8.3V17h16V8.3l-8 6.1-8-6.1z' })
+      );
+      if (!count) return glyph;
+      const label = count > 99 ? '99+' : String(count);
+      return h('span', {
+        style: { position: 'relative', display: 'inline-block', lineHeight: 0 },
+        title: t('badgeTitle'),
+      },
+        glyph,
+        h('span', {
+          style: {
+            position: 'absolute', top: -6, right: -8, minWidth: 16, height: 16,
+            padding: '0 4px', borderRadius: 8, background: 'var(--dsw-alias-state-error-primary)',
+            color: 'var(--dsw-alias-bg-base)', fontSize: 10, fontWeight: 700, lineHeight: '16px',
+            textAlign: 'center', whiteSpace: 'nowrap', boxShadow: '0 0 0 2px var(--dsw-alias-bg-base)',
+          },
+        }, label)
       );
     }
 
@@ -1004,6 +1051,7 @@ window.__ModuleLoader__.load({
         const markRead = (list) => (list || []).map(m => String(m.uid) === String(uid) ? Object.assign({}, m, { seen: true }) : m);
         setMessages(prev => markRead(prev));
         setCache(prev => Object.assign({}, prev, { [activeId]: markRead(prev[activeId]) }));
+        BADGE.clear();
         setBusy(true);
         try {
           const data = await rpc('getMessage', { id: activeId, uid });
@@ -1306,7 +1354,7 @@ window.__ModuleLoader__.load({
         /* ------------------------------- DETAIL ----------------------------- */
         view === 'detail' && h('div', { className: 'dsh-mail-view' },
           h('div', { className: 'dsh-mail-scroll' },
-            h('button', { className: 'dsh-mail-btn', onClick: () => setView('inbox') }, h(Ico, { name: 'back', size: 15 }), t('back')),
+            h('button', { className: 'dsh-mail-btn', onClick: () => { BADGE.clear(); setView('inbox'); } }, h(Ico, { name: 'back', size: 15 }), t('back')),
             detail && h('div', null,
               h('div', { className: 'dsh-mail-detailhead' },
                 h('h2', { className: 'dsh-mail-detailtitle' }, detail.subject || t('noSubject')),
