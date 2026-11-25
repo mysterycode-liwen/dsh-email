@@ -1,21 +1,51 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="Mail panel preview">
-  <rect width="640" height="300" fill="#f4f6fb"/>
-  <rect x="24" y="24" width="592" height="252" rx="12" fill="#ffffff" stroke="#d9dfeb"/>
-  <rect x="24" y="24" width="592" height="44" rx="12" fill="#eef3fc"/>
-  <circle cx="48" cy="46" r="6" fill="#3b82f6"/>
-  <text x="64" y="51" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#1f2a44">Mail</text>
-  <rect x="24" y="68" width="160" height="208" fill="#fafbfe"/>
-  <rect x="40" y="84" width="128" height="30" rx="6" fill="#e6edfb"/>
-  <text x="52" y="103" font-family="system-ui,sans-serif" font-size="12" fill="#3451a3">Accounts</text>
-  <rect x="40" y="124" width="128" height="30" rx="6" fill="#ffffff" stroke="#d9dfeb"/>
-  <text x="52" y="143" font-family="system-ui,sans-serif" font-size="12" fill="#1f2a44">Inbox</text>
-  <rect x="200" y="84" width="396" height="44" rx="8" fill="#ffffff" stroke="#d9dfeb"/>
-  <text x="214" y="111" font-family="system-ui,sans-serif" font-size="13" fill="#1f2a44">Project update</text>
-  <text x="214" y="126" font-family="system-ui,sans-serif" font-size="10" fill="#7b86a0">alice@example.com · today</text>
-  <rect x="200" y="136" width="396" height="44" rx="8" fill="#ffffff" stroke="#d9dfeb"/>
-  <text x="214" y="163" font-family="system-ui,sans-serif" font-size="13" fill="#1f2a44">Re: Meeting notes</text>
-  <text x="214" y="178" font-family="system-ui,sans-serif" font-size="10" fill="#7b86a0">bob@example.com · yesterday</text>
-  <rect x="200" y="188" width="396" height="72" rx="8" fill="#f8faff" stroke="#d9dfeb"/>
-  <rect x="528" y="200" width="56" height="24" rx="6" fill="#3b82f6"/>
-  <text x="540" y="216" font-family="system-ui,sans-serif" font-size="11" fill="#ffffff">Compose</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="Mail panel: a sidebar entry with an unread dot, a filter bar, and a mail list with an envelope action">
+  <!-- Text-free illustration: neutral mid-tones so it reads on both light and dark themes. -->
+  <rect x="24" y="24" width="592" height="252" rx="14" fill="#7c8ba6" fill-opacity="0.08" stroke="#7c8ba6" stroke-opacity="0.45"/>
+
+  <!-- Sidebar with the plugin entry and its unread dot -->
+  <rect x="40" y="54" width="132" height="30" rx="8" fill="#3b82f6" fill-opacity="0.18"/>
+  <path d="M54 63h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H54a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M52.6 65.4 60 70l7.4-4.6" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round"/>
+  <rect x="74" y="64" width="52" height="7" rx="3.5" fill="#7c8ba6" fill-opacity="0.7"/>
+  <circle cx="166" cy="69" r="5" fill="#ef4444"/>
+
+  <rect x="40" y="94" width="132" height="26" rx="8" fill="#7c8ba6" fill-opacity="0.14"/>
+  <rect x="54" y="104" width="46" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.55"/>
+  <rect x="40" y="128" width="132" height="26" rx="8" fill="#7c8ba6" fill-opacity="0.14"/>
+  <rect x="54" y="138" width="60" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.55"/>
+  <rect x="40" y="162" width="132" height="26" rx="8" fill="#7c8ba6" fill-opacity="0.14"/>
+  <rect x="54" y="172" width="52" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.55"/>
+
+  <!-- Filter bar: all / unread / read, unread selected -->
+  <rect x="196" y="54" width="70" height="24" rx="12" fill="#7c8ba6" fill-opacity="0.16"/>
+  <rect x="210" y="63" width="30" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.6"/>
+  <rect x="274" y="54" width="70" height="24" rx="12" fill="#3b82f6" fill-opacity="0.22"/>
+  <rect x="288" y="63" width="30" height="6" rx="3" fill="#3b82f6"/>
+  <rect x="352" y="54" width="70" height="24" rx="12" fill="#7c8ba6" fill-opacity="0.16"/>
+  <rect x="366" y="63" width="26" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.6"/>
+
+  <!-- Unread row with accent bar -->
+  <rect x="196" y="92" width="404" height="46" rx="10" fill="#3b82f6" fill-opacity="0.10" stroke="#3b82f6" stroke-opacity="0.45"/>
+  <rect x="196" y="98" width="3" height="34" rx="1.5" fill="#3b82f6"/>
+  <circle cx="224" cy="115" r="11" fill="#3b82f6" fill-opacity="0.28"/>
+  <rect x="244" y="104" width="96" height="7" rx="3.5" fill="#7c8ba6" fill-opacity="0.8"/>
+  <rect x="516" y="104" width="34" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.5"/>
+  <rect x="244" y="118" width="180" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.55"/>
+  <rect x="244" y="130" width="120" height="5" rx="2.5" fill="#7c8ba6" fill-opacity="0.4"/>
+
+  <!-- Read rows -->
+  <rect x="196" y="148" width="404" height="46" rx="10" fill="#7c8ba6" fill-opacity="0.08" stroke="#7c8ba6" stroke-opacity="0.35"/>
+  <circle cx="224" cy="171" r="11" fill="#7c8ba6" fill-opacity="0.22"/>
+  <rect x="244" y="160" width="120" height="7" rx="3.5" fill="#7c8ba6" fill-opacity="0.6"/>
+  <rect x="516" y="160" width="34" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.4"/>
+  <rect x="244" y="174" width="150" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.4"/>
+
+  <!-- Mail opened with a paperclip action at the right -->
+  <rect x="196" y="204" width="404" height="52" rx="10" fill="#7c8ba6" fill-opacity="0.08" stroke="#7c8ba6" stroke-opacity="0.35"/>
+  <circle cx="224" cy="230" r="11" fill="#7c8ba6" fill-opacity="0.22"/>
+  <rect x="244" y="218" width="88" height="7" rx="3.5" fill="#7c8ba6" fill-opacity="0.6"/>
+  <rect x="244" y="232" width="132" height="6" rx="3" fill="#7c8ba6" fill-opacity="0.4"/>
+  <!-- paperclip -->
+  <path d="M528 224c-4-4-11-4-15 0l-11 11c-6 6-6 15 0 21s15 6 21 0l9-9" fill="none" stroke="#3b82f6" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M519 233l-10 10c-3 3-3 7 0 10s7 3 10 0l8-8c4-4 4-11 0-15" fill="none" stroke="#3b82f6" stroke-width="2.4" stroke-linecap="round"/>
 </svg>

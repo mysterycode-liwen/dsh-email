@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Mail",
-    "description": "Send and receive email from QQ, 163, Gmail and other IMAP/SMTP accounts.",
+    "description": "Send and receive email from QQ, 163, Gmail and other IMAP/SMTP accounts, with attachments, an unread badge, read/unread filters, and new-mail alerts via a desktop pet or system notification. Credentials stay in the local vault.",
     "detail": "docs/DETAIL.md"
   },
   "ui": {

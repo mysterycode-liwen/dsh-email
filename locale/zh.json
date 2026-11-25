@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "邮件",
-    "description": "通过 QQ、163、Gmail 等 IMAP/SMTP 邮箱收发邮件。",
+    "description": "通过 QQ、163、Gmail 等 IMAP/SMTP 邮箱收发邮件，支持附件、未读角标与已读/未读筛选、新邮件提醒（桌宠播报或系统通知），授权码保存在本机凭据保险箱。",
     "detail": "docs/DETAIL.md"
   },
   "ui": {
