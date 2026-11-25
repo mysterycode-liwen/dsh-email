@@ -399,10 +399,13 @@ window.__ModuleLoader__.load({
       return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate();
     }
 
-    function Loading(label) {
+    function Loading(props) {
+      // Rendered as a React component via h(Loading), so the first argument is
+      // a props object ({} when none is passed) — never treat it as a string.
+      const label = (props && typeof props.label === 'string' && props.label) || t('loading');
       return h('div', { className: 'dsh-mail-loading' },
         h('div', { className: 'dsh-mail-spinner' }),
-        h('span', null, label || t('loading'))
+        h('span', null, label)
       );
     }
 
