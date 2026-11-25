@@ -86,6 +86,9 @@ window.__ModuleLoader__.load({
       presets: '快速设置',
       note: 'QQ / 163 需要邮箱授权码，而不是登录密码。授权码保存在凭据保险箱中。',
       confirmDelete: '确定删除此账号吗？',
+      syncNickname: '同步昵称',
+      nicknameSynced: '已从邮箱同步昵称',
+      nicknameNotFound: '未在已发送邮件中找到昵称，仍使用当前名称',
       noSubject: '(无主题)',
       ok: '成功',
       failed: '失败',
@@ -221,6 +224,9 @@ window.__ModuleLoader__.load({
       presets: 'Presets',
       note: 'QQ / 163 need an app password, not your login password. Stored in the credential vault.',
       confirmDelete: 'Delete this account?',
+      syncNickname: 'Sync name',
+      nicknameSynced: 'Account name synced from the mailbox',
+      nicknameNotFound: 'No display name found in sent mail; keeping the current name',
       noSubject: '(no subject)',
       ok: 'OK',
       failed: 'Failed',
@@ -415,6 +421,7 @@ window.__ModuleLoader__.load({
       '.dsh-mail-flash { display:flex; align-items:flex-start; gap:8px; margin:12px 16px 0; padding:10px 12px; border-radius:9px; font-size:12px; line-height:1.55; white-space:pre-wrap; }',
       '.dsh-mail-flash-error { background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent); color:var(--dsw-alias-state-error-primary); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); }',
       '.dsh-mail-flash-success { background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent); color:var(--dsw-alias-state-success-primary); border:1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent); }',
+      '.dsh-mail-flash-info { background:color-mix(in srgb, var(--dsw-alias-label-secondary) 12%, transparent); color:var(--dsw-alias-label-secondary); border:1px solid color-mix(in srgb, var(--dsw-alias-label-secondary) 28%, transparent); }',
 
       /* empty & loading */
       '.dsh-mail-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:64px 28px; text-align:center; }',
@@ -549,6 +556,10 @@ window.__ModuleLoader__.load({
       subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
       emit(accountIds) { for (const fn of this.listeners) { try { fn(accountIds); } catch { /* dead listener */ } } },
     };
+
+    // Accounts whose display name we already tried to sync this session, so the
+    // auto-sync never runs the same mailbox twice per app start.
+    const NICK_SYNCED = new Set();
 
     // A mail that arrived while DSH was restarting must not be swallowed by
     // baseline seeding. On first sight we still alert on unseen messages whose
@@ -1062,11 +1073,40 @@ window.__ModuleLoader__.load({
         return data;
       }
 
+      // Account labels should read like the mailbox itself ("李文"), not a
+      // preset such as "QQ邮箱". syncNickname reads the From display name of
+      // our own sent mail on the server; we persist it and update the list.
+      async function syncNickname(id, announce) {
+        try {
+          const data = await rpc('syncNickname', { id });
+          if (data && data.synced && data.account) {
+            setAccounts(prev => (prev || []).map(a => a.id === data.account.id ? Object.assign({}, a, { name: data.account.name }) : a));
+            if (announce) notify('success', t('nicknameSynced'));
+            return true;
+          }
+          if (announce) notify('info', t('nicknameNotFound'));
+        } catch (e) {
+          NICK_SYNCED.delete(id);
+          if (announce) reportError(e);
+        }
+        return false;
+      }
+
+      // One pass per account per session, sequential to stay gentle with IMAP.
+      async function autoSyncNicknames(list) {
+        for (const a of list || []) {
+          if (!a || !a.id || NICK_SYNCED.has(a.id)) continue;
+          NICK_SYNCED.add(a.id);
+          await syncNickname(a.id, false);
+        }
+      }
+
       async function refreshAccounts() {
         try {
           const data = await rpc('listAccounts');
           setAccounts(data.accounts || []);
           if (!activeId && data.accounts && data.accounts.length) setActiveId(data.accounts[0].id);
+          void autoSyncNicknames(data.accounts);
         } catch (e) {
           reportError(e);
         }
@@ -1421,8 +1461,8 @@ window.__ModuleLoader__.load({
           ))
         ),
 
-        flash && h('div', { className: 'dsh-mail-flash ' + (flash.kind === 'error' ? 'dsh-mail-flash-error' : 'dsh-mail-flash-success') },
-          h(Ico, { name: flash.kind === 'error' ? 'warning' : 'check', size: 15 }),
+        flash && h('div', { className: 'dsh-mail-flash ' + (flash.kind === 'error' ? 'dsh-mail-flash-error' : (flash.kind === 'info' ? 'dsh-mail-flash-info' : 'dsh-mail-flash-success')) },
+          h(Ico, { name: flash.kind === 'error' ? 'warning' : (flash.kind === 'info' ? 'inbox' : 'check'), size: 15 }),
           h('span', null, flash.text)
         ),
 
@@ -1582,6 +1622,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, (a.imapHost || '') + ':' + a.imapPort + ' · ' + (a.smtpHost || '') + ':' + a.smtpPort),
               h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
                 h('button', { className: 'dsh-mail-btn', onClick: () => testAccount(a.id), disabled: busy }, h(Ico, { name: 'check', size: 14 }), t('test')),
+                h('button', { className: 'dsh-mail-btn', onClick: () => syncNickname(a.id, true), disabled: busy }, h(Ico, { name: 'refresh', size: 14 }), t('syncNickname')),
                 h('button', { className: 'dsh-mail-btn', onClick: () => { setActiveId(a.id); navTo('inbox'); } }, h(Ico, { name: 'inbox', size: 14 }), t('inbox')),
                 h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteAccount(a.id), disabled: busy }, h(Ico, { name: 'trash', size: 14 }), t('delete'))
               )
