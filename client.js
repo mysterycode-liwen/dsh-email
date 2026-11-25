@@ -370,9 +370,13 @@ window.__ModuleLoader__.load({
       warning: 'M12 3L2 20h20L12 3zm0 6v5m0 3v.5',
       plus: 'M12 5v14M5 12h14',
     };
-    function Ico(name, size) {
+    function Ico(props) {
+      // Rendered as a React component via h(Ico, { name, size }); the first
+      // argument is a props object, not a positional name string.
+      const name = (props && props.name) || 'mail';
+      const size = (props && props.size) || 18;
       return h('svg', {
-        viewBox: '0 0 24 24', width: size || 18, height: size || 18, 'aria-hidden': true,
+        viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': true,
         style: { display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' },
       }, h('path', { d: ICONS[name] || ICONS.mail }));
     }
