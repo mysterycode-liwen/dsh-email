@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useRef, useLayoutEffect } = React;
 
     const NS = 'dsh-mail';
     const API = '/api/dsh-mail';
@@ -771,37 +771,58 @@ window.__ModuleLoader__.load({
       startPoller();
     }
 
-    // Solid envelope for the sidebar panel icon (the sidebar draws its own
-    // button; this component renders the glyph plus the unread badge).
+    // Solid envelope for the sidebar panel icon. The sidebar owns the button
+    // ([panelGlyph(our icon)] [panelTitle(label text)]); the label is a plain
+    // string also used for aria-label, so we cannot inject a React node there.
+    // Instead we mount the unread badge imperatively as the LAST child of the
+    // button, which renders it AFTER the label text in the expanded state (and
+    // beside the icon when the sidebar is collapsed and has no text).
+    const BADGE_STYLE = {
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      height: 15, minWidth: 15, padding: '0 4px', borderRadius: 8,
+      background: 'var(--dsw-alias-state-error-primary)', color: 'var(--dsw-alias-bg-base)',
+      fontSize: 10, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+      whiteSpace: 'nowrap', flex: 'none', marginLeft: 2,
+    };
     function Icon(props) {
       const size = (props && props.size) || 20;
       const active = !!(props && props.active);
+      const rootRef = useRef(null);
+      const badgeRef = useRef(null);
       const [count, setCount] = useState(() => BADGE.get());
       useEffect(() => BADGE.subscribe(setCount), []);
-      const glyph = h('svg', { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': true, style: { display: 'block' } },
-        h('path', { fill: active ? 'var(--dsw-alias-brand-primary)' : 'currentColor', d: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm9 8.2L4.2 7h15.6L12 13.2zM4 8.3V17h16V8.3l-8 6.1-8-6.1z' })
-      );
-      if (!count) return glyph;
-      const label = count > 99 ? '99+' : String(count);
-      // DSH places this glyph in a fixed-size .panelGlyph span, followed by the
-      // panel title with only a 6px gap. An absolutely-positioned badge spills
-      // out of that box and covers both the envelope and the title. Instead keep
-      // the badge in normal flow, to the RIGHT of the glyph: the wrapper grows,
-      // so DSH pushes the title aside and neither the icon nor the text is covered.
-      return h('span', {
-        style: { display: 'inline-flex', alignItems: 'center', lineHeight: 0 },
-        title: t('badgeTitle'),
-      },
-        glyph,
-        h('span', {
-          style: {
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            marginLeft: 3, height: 15, minWidth: 15, padding: '0 4px',
-            borderRadius: 8, background: 'var(--dsw-alias-state-error-primary)',
-            color: 'var(--dsw-alias-bg-base)', fontSize: 10, fontWeight: 700, lineHeight: '15px',
-            textAlign: 'center', whiteSpace: 'nowrap',
-          },
-        }, label)
+      useEffect(() => () => {
+        if (badgeRef.current && badgeRef.current.parentNode) badgeRef.current.parentNode.removeChild(badgeRef.current);
+        badgeRef.current = null;
+      }, []);
+      useLayoutEffect(() => {
+        const root = rootRef.current;
+        // Find the owning sidebar button by structure, not by DSH's hashed
+        // CSS-module class names. closest('button') tolerates any wrapper
+        // elements that renderSlot/renderFactorySlot may insert.
+        const button = root && root.closest && root.closest('button');
+        if (!button) return;
+        const label = count > 99 ? '99+' : String(count);
+        if (!count) {
+          if (badgeRef.current && badgeRef.current.parentNode) badgeRef.current.parentNode.removeChild(badgeRef.current);
+          badgeRef.current = null;
+          return;
+        }
+        let badge = badgeRef.current;
+        if (!badge || badge.parentNode !== button) {
+          badge = document.createElement('span');
+          badge.className = 'dsh-mail-sidebadge';
+          badge.title = t('badgeTitle');
+          Object.assign(badge.style, BADGE_STYLE);
+          button.appendChild(badge);
+          badgeRef.current = badge;
+        }
+        badge.textContent = label;
+      });
+      return h('span', { ref: rootRef, style: { display: 'inline-flex', alignItems: 'center', lineHeight: 0 } },
+        h('svg', { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': true, style: { display: 'block' } },
+          h('path', { fill: active ? 'var(--dsw-alias-brand-primary)' : 'currentColor', d: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm9 8.2L4.2 7h15.6L12 13.2zM4 8.3V17h16V8.3l-8 6.1-8-6.1z' })
+        )
       );
     }
 
