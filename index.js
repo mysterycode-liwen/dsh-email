@@ -246,17 +246,38 @@ async function handleRequest(ctx, request) {
           folder: body.folder || 'INBOX',
         }));
       }
+      case 'getAttachment': {
+        const payload = await getAccountPayload(ctx, String(body.id || ''));
+        return json(await runBridge('getAttachment', {
+          account: bridgeAccount(payload),
+          uid: String(body.uid || ''),
+          folder: body.folder || 'INBOX',
+          index: Number(body.index) || 0,
+        }));
+      }
       case 'sendMessage': {
         const id = String(body.id || '');
         const payload = await getAccountPayload(ctx, id);
         const to = String(body.to || '').trim();
         if (!to) return json({ ok: false, error: 'to is required' }, 400);
+        const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+        // Guard the outbound path: each attachment arrives base64-encoded in the
+        // request body and is buffered in memory on both sides of the bridge.
+        let totalBytes = 0;
+        for (const att of attachments) {
+          const content = String((att && att.content) || '');
+          if (!content) continue;
+          totalBytes += Math.floor((content.length * 3) / 4);
+        }
+        if (totalBytes > 25 * 1024 * 1024) {
+          return json({ ok: false, error: '附件总大小超过 25 MB，请分开发送。' }, 400);
+        }
         const result = await runBridge('sendMessage', {
           account: bridgeAccount(payload),
           to,
           subject: String(body.subject || ''),
           body: String(body.body || ''),
-          attachments: Array.isArray(body.attachments) ? body.attachments : [],
+          attachments,
         });
         if (result.ok) {
           // Keep a local outbox record as an instant, offline-capable mirror of
@@ -270,6 +291,11 @@ async function handleRequest(ctx, request) {
               subject: String(body.subject || ''),
               body: String(body.body || ''),
               date: new Date().toISOString(),
+              attachments: attachments.map(a => ({
+                name: String((a && a.name) || 'attachment'),
+                size: Math.floor((String((a && a.content) || '').length * 3) / 4),
+                mime: String((a && a.mime) || ''),
+              })),
             });
             await writeData(ctx, outboxKey(id), { sent: list.slice(0, 200) });
           } catch {

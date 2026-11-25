@@ -114,6 +114,16 @@ window.__ModuleLoader__.load({
       saved: '已保存。',
       selectContact: '用此地址写邮件',
       attached: '附件',
+      attachments: '附件',
+      attachmentsHint: '拖拽文件到此处，或点击「添加附件」',
+      addAttachment: '添加附件',
+      removeAttachment: '移除',
+      downloadAttachment: '下载',
+      noAttachments: '没有附件',
+      attachmentTooLarge: '附件总大小超过 25 MB，请分开发送。',
+      attachmentFailed: '附件操作失败：',
+      attachmentSaved: '已保存到下载目录：',
+      sending: '发送中…',
       settingsTitle: '邮件',
       settingsDescription: '配置 AI 助手是否可以读取你的邮箱。',
       agentMailAccessLabel: '允许 AI 助手查询邮箱',
@@ -239,6 +249,16 @@ window.__ModuleLoader__.load({
       saved: 'Saved.',
       selectContact: 'Compose to this address',
       attached: 'Attachments',
+      attachments: 'Attachments',
+      attachmentsHint: 'Drop files here, or click "Add attachment"',
+      addAttachment: 'Add attachment',
+      removeAttachment: 'Remove',
+      downloadAttachment: 'Download',
+      noAttachments: 'No attachments',
+      attachmentTooLarge: 'Attachments exceed 25 MB in total; please send them separately.',
+      attachmentFailed: 'Attachment failed: ',
+      attachmentSaved: 'Saved to your downloads folder: ',
+      sending: 'Sending…',
       settingsTitle: 'Mail',
       settingsDescription: 'Control whether the AI assistant may read your mailbox.',
       agentMailAccessLabel: 'Allow AI assistant to query mail',
@@ -374,6 +394,16 @@ window.__ModuleLoader__.load({
       '.dsh-mail-input:focus, .dsh-mail-textarea:focus, .dsh-mail-selectinput:focus { outline:none; border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }',
       '.dsh-mail-textarea { min-height:200px; resize:vertical; line-height:1.6; }',
       '.dsh-mail-hint { font-size:11.5px; color:var(--dsw-alias-label-secondary); line-height:1.6; }',
+
+      /* attachments */
+      '.dsh-mail-attachbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }',
+      '.dsh-mail-attachlist { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }',
+      '.dsh-mail-attach { display:flex; align-items:center; gap:8px; border:1px solid var(--dsw-alias-border-l1); border-radius:8px; padding:7px 10px; background:var(--dsw-alias-bg-base); font-size:12px; }',
+      '.dsh-mail-attach-name { font-weight:600; color:var(--dsw-alias-label-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }',
+      '.dsh-mail-attach-size { flex:none; font-size:11px; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-attach .dsh-mail-iconbtn { width:26px; height:26px; flex:none; }',
+      '.dsh-mail-drop { border:1px dashed var(--dsw-alias-border-l2); border-radius:8px; padding:12px; text-align:center; font-size:11.5px; color:var(--dsw-alias-label-secondary); margin-bottom:12px; }',
+      '.dsh-mail-drop.is-over { border-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-brand-primary); background:color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent); }',
 
       /* presets */
       '.dsh-mail-pill { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--dsw-alias-border-l2); border-radius:999px; padding:5px 12px; font-size:11.5px; font-weight:600; cursor:pointer; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-secondary); transition:all .12s; }',
@@ -864,6 +894,8 @@ window.__ModuleLoader__.load({
       check: 'M4 12l5 5L20 6',
       warning: 'M12 3L2 20h20L12 3zm0 6v5m0 3v.5',
       plus: 'M12 5v14M5 12h14',
+      attach: 'M20 11.5l-8.2 8.2a4.5 4.5 0 0 1-6.4-6.4l8.5-8.5a3 3 0 0 1 4.3 4.3l-8.5 8.5a1.5 1.5 0 0 1-2.2-2.2l7.8-7.8',
+      download: 'M12 4v11m0 0l-4-4m4 4l4-4M4 19h16',
     };
     function Ico(props) {
       // Rendered as a React component via h(Ico, { name, size }); the first
@@ -896,6 +928,47 @@ window.__ModuleLoader__.load({
       if (d.toDateString() === now.toDateString()) return hh;
       if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '/' + d.getDate();
       return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate();
+    }
+
+    function fmtSize(bytes) {
+      const n = Number(bytes) || 0;
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // The Host half buffers the whole bridge reply, so keep one attachment under
+    // this cap; the send path enforces a 25 MB total for the same reason.
+    const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          const comma = result.indexOf(',');
+          resolve(comma === -1 ? result : result.slice(comma + 1));
+        };
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function saveAttachmentBytes(name, mime, base64) {
+      // Decode base64 to bytes, then hand the browser a Blob download. This keeps
+      // the file binary-exact and never goes through the network again.
+      const bin = atob(base64 || '');
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 
     function Loading(props) {
@@ -932,6 +1005,13 @@ window.__ModuleLoader__.load({
       const [flash, setFlash] = useState(null);
       const [form, setForm] = usePersistent('form', { preset: 'qq', name: '', username: '', authCode: '', imapHost: PRESETS.qq.imapHost, imapPort: 993, smtpHost: PRESETS.qq.smtpHost, smtpPort: 465 });
       const [compose, setCompose] = usePersistent('compose', { to: '', subject: '', body: '' });
+      // Outgoing attachments live in React state (not PERSIST): they hold base64
+      // file bytes, which must not be written to profile storage.
+      const [composeAtts, setComposeAtts] = useState([]);
+      const [attachBusy, setAttachBusy] = useState(false);
+      // Received attachments are fetched on demand from the mail server.
+      const [attachState, setAttachState] = useState({});
+      const [dropOver, setDropOver] = useState(false);
       const [sent, setSent] = usePersistent('sent', []);
       const [contacts, setContacts] = usePersistent('contacts', []);
       const [contactForm, setContactForm] = usePersistent('contactForm', { name: '', email: '' });
@@ -1158,15 +1238,69 @@ window.__ModuleLoader__.load({
       async function sendMail() {
         setBusy(true);
         try {
-          await rpc('sendMessage', { id: activeId, to: compose.to, subject: compose.subject, body: compose.body });
+          await rpc('sendMessage', {
+            id: activeId,
+            to: compose.to,
+            subject: compose.subject,
+            body: compose.body,
+            attachments: composeAtts.map(a => ({ name: a.name, mime: a.mime, content: a.content })),
+          });
           notify('success', t('ok'));
           setCompose({ to: '', subject: '', body: '' });
+          setComposeAtts([]);
           await loadSent();
           setView('sent');
         } catch (e) {
           reportError(e);
         } finally {
           setBusy(false);
+        }
+      }
+
+      async function addAttachments(fileList) {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        setAttachBusy(true);
+        try {
+          const next = composeAtts.slice();
+          for (const file of files) {
+            if (next.some(a => a.name === file.name && a.size === file.size)) continue; // 去重同一个文件
+            if (file.size > MAX_ATTACH_BYTES) {
+              notify('error', t('attachmentTooLarge'));
+              continue;
+            }
+            const content = await readFileAsBase64(file);
+            next.push({ name: file.name, size: file.size, mime: file.type || '', content });
+          }
+          const total = next.reduce((sum, a) => sum + (Number(a.size) || 0), 0);
+          if (total > MAX_ATTACH_BYTES) {
+            // 超限时整体拒绝，避免用户以为附件已带上却发送失败。
+            notify('error', t('attachmentTooLarge'));
+          } else {
+            setComposeAtts(next);
+          }
+        } catch (e) {
+          notify('error', t('attachmentFailed') + (e && e.message ? e.message : ''));
+        } finally {
+          setAttachBusy(false);
+        }
+      }
+
+      function removeAttachment(index) {
+        setComposeAtts(prev => prev.filter((_, i) => i !== index));
+      }
+
+      async function downloadAttachment(att) {
+        if (!detail || !activeId) return;
+        const key = String(att.index);
+        setAttachState(prev => Object.assign({}, prev, { [key]: 'loading' }));
+        try {
+          const data = await rpc('getAttachment', { id: activeId, uid: detail.uid, index: att.index });
+          saveAttachmentBytes(data.name || att.name, data.mime || att.mime, data.content);
+          setAttachState(prev => Object.assign({}, prev, { [key]: 'ok' }));
+        } catch (e) {
+          setAttachState(prev => Object.assign({}, prev, { [key]: 'error' }));
+          reportError(e);
         }
       }
 
@@ -1359,7 +1493,21 @@ window.__ModuleLoader__.load({
                 h('h2', { className: 'dsh-mail-detailtitle' }, sentDetail.subject || t('noSubject')),
                 h('div', { className: 'dsh-mail-detailmeta' }, t('to') + ': ' + (sentDetail.to || '') + ' · ' + fmtDate(sentDetail.date))
               ),
-              h('div', { className: 'dsh-mail-mailbody', style: { whiteSpace: 'pre-wrap' } }, String(sentDetail.body || ''))
+              h('div', { className: 'dsh-mail-mailbody', style: { whiteSpace: 'pre-wrap' } }, String(sentDetail.body || '')),
+              // Sent mail keeps attachment metadata only (names/sizes), which is
+              // enough to confirm what went out with the message.
+              Array.isArray(sentDetail.attachments) && sentDetail.attachments.length > 0
+                ? h('div', { className: 'dsh-mail-field', style: { marginTop: 14 } },
+                    h('span', { className: 'dsh-mail-label' }, t('attachments') + ' (' + sentDetail.attachments.length + ')'),
+                    h('div', { className: 'dsh-mail-attachlist' }, sentDetail.attachments.map((att, i) =>
+                      h('div', { key: String(att.name) + i, className: 'dsh-mail-attach' },
+                        h(Ico, { name: 'attach', size: 14 }),
+                        h('span', { className: 'dsh-mail-attach-name', title: att.name }, att.name),
+                        att.size ? h('span', { className: 'dsh-mail-attach-size' }, fmtSize(att.size)) : null
+                      )
+                    ))
+                  )
+                : null
             )
             : h('div', { className: 'dsh-mail-view' },
               loadingSent && sent.length === 0
@@ -1513,7 +1661,29 @@ window.__ModuleLoader__.load({
                   if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
                 },
                 dangerouslySetInnerHTML: { __html: detail.html || ('<div style="white-space:pre-wrap">' + escHtml(detail.body || '') + '</div>') },
-              })
+              }),
+              // Attachments are fetched on demand so opening a mail stays fast.
+              Array.isArray(detail.attachments) && detail.attachments.length > 0
+                ? h('div', { className: 'dsh-mail-field', style: { marginTop: 14 } },
+                    h('span', { className: 'dsh-mail-label' }, t('attachments') + ' (' + detail.attachments.length + ')'),
+                    h('div', { className: 'dsh-mail-attachlist' }, detail.attachments.map(att =>
+                      h('div', { key: String(att.index), className: 'dsh-mail-attach' },
+                        h(Ico, { name: 'attach', size: 14 }),
+                        h('span', { className: 'dsh-mail-attach-name', title: att.name }, att.name),
+                        h('span', { className: 'dsh-mail-attach-size' }, fmtSize(att.size)),
+                        h('button', {
+                          className: 'dsh-mail-btn' + (attachState[String(att.index)] === 'ok' ? ' dsh-mail-refresh-ok' : attachState[String(att.index)] === 'error' ? ' dsh-mail-refresh-err' : ''),
+                          type: 'button',
+                          disabled: attachState[String(att.index)] === 'loading',
+                          onClick: () => downloadAttachment(att),
+                          title: t('downloadAttachment'),
+                        },
+                          h(Ico, { name: attachState[String(att.index)] === 'ok' ? 'check' : attachState[String(att.index)] === 'error' ? 'warning' : 'download', size: 14 }),
+                          t('downloadAttachment'))
+                      )
+                    ))
+                  )
+                : null
             )
           )
         ),
@@ -1525,7 +1695,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsh-mail-cardhead' },
                 h(Ico, { name: 'compose', size: 16 }), t('compose'),
                 h('span', { className: 'dsh-mail-spacer' }),
-                h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: sendMail, disabled: busy || !compose.to }, h(Ico, { name: 'sent', size: 15 }), t('send'))
+                h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: sendMail, disabled: busy || attachBusy || !compose.to }, h(Ico, { name: 'sent', size: 15 }), t('send'))
               ),
               h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, account ? account.username : ''),
               h('div', { className: 'dsh-mail-field' },
@@ -1539,6 +1709,49 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsh-mail-field' },
                 h('span', { className: 'dsh-mail-label' }, t('body')),
                 h('textarea', { className: 'dsh-mail-textarea', value: compose.body, onChange: e => setCompose(Object.assign({}, compose, { body: e.target.value })) })
+              ),
+              h('div', { className: 'dsh-mail-field' },
+                h('span', { className: 'dsh-mail-label' }, t('attachments')),
+                h('div', { className: 'dsh-mail-attachbar' },
+                  h('label', { className: 'dsh-mail-btn', style: { cursor: 'pointer' } },
+                    h(Ico, { name: 'attach', size: 15 }),
+                    t('addAttachment'),
+                    h('input', {
+                      type: 'file', multiple: true,
+                      'data-testid': 'attachment-input',
+                      style: { display: 'none' },
+                      onChange: e => { void addAttachments(e.target.files); e.target.value = ''; },
+                    })
+                  ),
+                  attachBusy ? h('span', { className: 'dsh-mail-hint' }, t('loading')) : null
+                ),
+                // Dropping files anywhere on this card also adds them.
+                h('div', {
+                  className: 'dsh-mail-drop' + (dropOver ? ' is-over' : ''),
+                  onDragOver: e => { e.preventDefault(); if (!dropOver) setDropOver(true); },
+                  onDragLeave: () => setDropOver(false),
+                  onDrop: e => {
+                    e.preventDefault();
+                    setDropOver(false);
+                    if (e.dataTransfer && e.dataTransfer.files) void addAttachments(e.dataTransfer.files);
+                  },
+                }, dropOver ? t('addAttachment') : t('attachmentsHint')),
+                composeAtts.length > 0
+                  ? h('div', { className: 'dsh-mail-attachlist' }, composeAtts.map((a, i) =>
+                      h('div', { key: a.name + '-' + i, className: 'dsh-mail-attach' },
+                        h(Ico, { name: 'attach', size: 14 }),
+                        h('span', { className: 'dsh-mail-attach-name', title: a.name }, a.name),
+                        h('span', { className: 'dsh-mail-attach-size' }, fmtSize(a.size)),
+                        h('button', {
+                          className: 'dsh-mail-btn dsh-mail-iconbtn',
+                          type: 'button',
+                          onClick: () => removeAttachment(i),
+                          title: t('removeAttachment'),
+                          'aria-label': t('removeAttachment'),
+                        }, h(Ico, { name: 'trash', size: 14 }))
+                      )
+                    ))
+                  : null
               )
             )
           )

@@ -11,7 +11,8 @@ Operations
   test         verify IMAP + SMTP connectivity for an account
   listMessages list recent messages from a mailbox folder
   getMessage   fetch one message's full body by UID
-  sendMessage  send a message over SMTP
+  getAttachment  download one attachment of a message as base64
+  sendMessage  send a message over SMTP (with attachments)
   listSent     read the server's Sent folder (cross-device sync)
   getContacts  read the synced contacts stored on the mail server
   setContacts  write the synced contacts to the mail server
@@ -33,6 +34,7 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime, formatdate, getaddresses
 import uuid
 from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email import encoders
 
 # Local outbox records (mirrored to Sent so they appear in the IMAP Sent folder).
@@ -226,6 +228,45 @@ def _build_cid_map(msg):
         b64 = base64.b64encode(data).decode("ascii")
         cid_map[cid.strip("<>")] = "data:%s;base64,%s" % (ctype, b64)
     return cid_map
+
+
+def attachments_of(msg):
+    """List downloadable attachments as metadata only (no payload).
+
+    Inline images referenced by Content-ID are part of the rendered body, not
+    attachments, so they are skipped unless the part also carries a filename.
+    ``index`` is the part's position in ``msg.walk()``; it is stable for the
+    same raw message, which lets a later call fetch exactly that part.
+    """
+    result = []
+    try:
+        for idx, part in enumerate(msg.walk()):
+            if part.is_multipart():
+                continue
+            disp = str(part.get("Content-Disposition") or "")
+            filename = part.get_filename()
+            if not filename and "attachment" not in disp.lower():
+                continue
+            if "inline" in disp.lower() and not filename:
+                continue
+            try:
+                filename = dec(filename)
+            except Exception:
+                filename = str(filename or "")
+            filename = filename or ("attachment-%d" % idx)
+            try:
+                size = len(part.get_payload(decode=True) or b"")
+            except Exception:
+                size = 0
+            result.append({
+                "index": idx,
+                "name": filename,
+                "size": size,
+                "mime": part.get_content_type(),
+            })
+    except Exception:
+        pass
+    return result
 
 
 def body_of(msg, want_html=False):
@@ -574,6 +615,61 @@ def op_get_message(req):
             "date": date_iso,
             "body": body["text"],
             "html": body["html"],
+            "attachments": attachments_of(msg),
+        }
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        try:
+            client.logout()
+        except Exception:
+            pass
+
+
+def op_get_attachment(req):
+    """Return one attachment's bytes as base64, addressed by part index.
+
+    The index is the position in the message's part walk, as reported by
+    ``attachments_of`` when the message was read. Reading uses BODY.PEEK so
+    downloading an attachment never changes the read/unread flag.
+    """
+    acc = req["account"]
+    uid = str(req["uid"])
+    folder = req.get("folder") or "INBOX"
+    index = int(req.get("index") or 0)
+    try:
+        client = imap_connect(acc)
+    except Exception as exc:
+        return fail_result(exc)
+    try:
+        typ, data = client.select('"%s"' % folder.replace('"', ""), readonly=True)
+        if typ != "OK":
+            return {"ok": False, "error": "选择文件夹失败：%s" % imap_data_text(data), "code": "folder"}
+        typ, msg_data = client.uid("FETCH", uid, "(BODY.PEEK[])")
+        if typ != "OK" or not msg_data or msg_data[0] is None:
+            return {"ok": False, "error": "未找到这封邮件（可能已被删除）。", "code": "not_found"}
+        from email import message_from_bytes
+        msg = message_from_bytes(msg_data[0][1])
+        parts = list(msg.walk())
+        if index < 0 or index >= len(parts):
+            return {"ok": False, "error": "附件位置已失效，请重新打开邮件。", "code": "not_found"}
+        part = parts[index]
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return {"ok": False, "error": "这个附件没有可下载的内容。", "code": "generic"}
+        # Refuse absurdly large payloads: the JSON reply carries the bytes and
+        # the Host half buffers the whole bridge response in memory.
+        if len(payload) > 25 * 1024 * 1024:
+            return {"ok": False, "error": "附件超过 25 MB，暂不支持下载。", "code": "toolarge"}
+        filename = dec(part.get_filename()) or ("attachment-%d" % index)
+        return {
+            "ok": True,
+            "name": filename,
+            "mime": part.get_content_type(),
+            "size": len(payload),
+            "content": base64.b64encode(payload).decode("ascii"),
         }
     finally:
         try:
@@ -598,6 +694,48 @@ def _contact_entries(addr_header):
     return result
 
 
+def _attachment_parts(attachments):
+    """Turn [{name, content(base64)}] into MIMEBase parts."""
+    import mimetypes
+    parts = []
+    for att in attachments or []:
+        fname = str(att.get("name") or "attachment")
+        try:
+            data = base64.b64decode(att.get("content") or "")
+        except Exception:
+            data = b""
+        mime = str(att.get("mime") or "").strip()
+        if "/" not in mime:
+            mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        maintype, subtype = mime.split("/", 1)
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        safe = fname.replace("\r", "").replace("\n", "")
+        # RFC 2231 encoding keeps non-ASCII filenames intact for clients.
+        part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", safe))
+        parts.append(part)
+    return parts
+
+
+def build_message(acc, recipients, subject, body, attachments=None):
+    """Build the outgoing message, multipart only when attachments exist."""
+    attachments = attachments or []
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        msg.attach(MIMEText(body or "", "plain", "utf-8"))
+        for part in _attachment_parts(attachments):
+            msg.attach(part)
+    else:
+        msg = MIMEText(body or "", "plain", "utf-8")
+    msg["From"] = acc["username"]
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject or ""
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = "<%s@%s>" % (uuid.uuid4().hex, acc["username"].split("@")[-1] or "local")
+    return msg
+
+
 def _append_to_sent(acc, recipients, subject, body, attachments=None):
     """Mirror a successfully sent message into the IMAP Sent folder.
 
@@ -605,30 +743,7 @@ def _append_to_sent(acc, recipients, subject, body, attachments=None):
     """
     client = None
     try:
-        attachments = attachments or []
-        if attachments:
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart("mixed")
-            msg.attach(MIMEText(body or "", "plain", "utf-8"))
-            for att in attachments:
-                fname = str(att.get("name") or "attachment")
-                try:
-                    data = base64.b64decode(att.get("content") or "")
-                except Exception:
-                    data = b""
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(data)
-                encoders.encode_base64(part)
-                safe = fname.replace('"', "").replace("\r", "").replace("\n", "")
-                part.add_header("Content-Disposition", 'attachment; filename="%s"' % safe)
-                msg.attach(part)
-        else:
-            msg = MIMEText(body or "", "plain", "utf-8")
-        msg["From"] = acc["username"]
-        msg["To"] = ", ".join(recipients)
-        msg["Subject"] = subject or ""
-        msg["Date"] = formatdate(localtime=True)
-        msg["Message-ID"] = "<%s@%s>" % (uuid.uuid4().hex, acc["username"].split("@")[-1] or "local")
+        msg = build_message(acc, recipients, subject, body, attachments)
         client = imap_connect(acc)
         sent_folder = _find_sent_folder(client) or _OUTBOX_FOLDER
         try:
@@ -665,11 +780,7 @@ def op_send_message(req):
     recipients = [a.strip() for a in re.split(r"[,;\s]+", str(to)) if a.strip()]
     if not recipients:
         return {"ok": False, "error": "收件人不能为空。", "code": "generic"}
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = acc["username"]
-    msg["To"] = ", ".join(recipients)
-    msg["Subject"] = subject
-    msg["Date"] = formatdate(localtime=True)
+    msg = build_message(acc, recipients, subject, body, attachments)
     try:
         client = smtp_connect(acc)
     except Exception as exc:
@@ -991,6 +1102,7 @@ OPS = {
     "listMessages": op_list_messages,
     "getMessage": op_get_message,
     "sendMessage": op_send_message,
+    "getAttachment": op_get_attachment,
     "listSent": op_list_sent,
     "getContacts": op_get_contacts,
     "setContacts": op_set_contacts,
