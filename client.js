@@ -90,9 +90,8 @@ window.__ModuleLoader__.load({
       presets: '快速设置',
       note: 'QQ / 163 需要邮箱授权码，而不是登录密码。授权码保存在凭据保险箱中。',
       confirmDelete: '确定删除此账号吗？',
-      syncNickname: '同步昵称',
-      nicknameSynced: '已从邮箱同步昵称',
-      nicknameNotFound: '未在已发送邮件中找到昵称，仍使用当前名称',
+      rename: '重命名',
+      renameHint: '名称只在本机显示，默认用邮箱前缀。',
       noSubject: '(无主题)',
       ok: '成功',
       failed: '失败',
@@ -229,9 +228,8 @@ window.__ModuleLoader__.load({
       presets: 'Presets',
       note: 'QQ / 163 need an app password, not your login password. Stored in the credential vault.',
       confirmDelete: 'Delete this account?',
-      syncNickname: 'Sync name',
-      nicknameSynced: 'Account name synced from the mailbox',
-      nicknameNotFound: 'No display name found in sent mail; keeping the current name',
+      rename: 'Rename',
+      renameHint: 'The name is local to this machine; it defaults to the mailbox prefix.',
       noSubject: '(no subject)',
       ok: 'OK',
       failed: 'Failed',
@@ -562,10 +560,6 @@ window.__ModuleLoader__.load({
       subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
       emit(accountIds) { for (const fn of this.listeners) { try { fn(accountIds); } catch { /* dead listener */ } } },
     };
-
-    // Accounts whose display name we already tried to sync this session, so the
-    // auto-sync never runs the same mailbox twice per app start.
-    const NICK_SYNCED = new Set();
 
     // A mail that arrived while DSH was restarting must not be swallowed by
     // baseline seeding. On first sight we still alert on unseen messages whose
@@ -936,6 +930,15 @@ window.__ModuleLoader__.load({
       const v = String(s || '').trim();
       return v ? v.charAt(0).toUpperCase() : '?';
     }
+    // The local label shown for an account defaults to the part before "@", so
+    // a fresh mailbox reads as "1101522940" instead of a generic "QQ邮箱" or a
+    // guessed display name the user never chose.
+    function defaultAccountName(username) {
+      const v = String(username || '').trim();
+      if (!v) return '';
+      const at = v.indexOf('@');
+      return at > 0 ? v.slice(0, at) : v;
+    }
     function fmtDate(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -1036,6 +1039,9 @@ window.__ModuleLoader__.load({
       // Per-account cache of fetched message lists. Survives account switching
       // and remounts so we can show cached mail immediately while refreshing.
       const [cache, setCache] = usePersistent('mailCache', {});
+      // Inline rename: the account id being edited plus the draft label.
+      const [renameId, setRenameId] = useState('');
+      const [renameDraft, setRenameDraft] = useState('');
 
       // Keep a fresh handler so the mail-event subscription never sees stale
       // activeId/view. New mail on the currently open account refreshes the
@@ -1079,31 +1085,44 @@ window.__ModuleLoader__.load({
         return data;
       }
 
-      // Account labels should read like the mailbox itself ("李文"), not a
-      // preset such as "QQ邮箱". syncNickname reads the From display name of
-      // our own sent mail on the server; we persist it and update the list.
-      async function syncNickname(id, announce) {
+      // Account labels are set by the user, not guessed from mail headers: a
+      // mailbox's own display name is only visible after signing in to the
+      // provider, so any guess is unreliable. The default label is the mailbox
+      // prefix and this just persists whatever the user prefers.
+      async function renameAccount(id, name) {
+        const next = String(name == null ? '' : name).trim();
+        if (!next) return false;
         try {
-          const data = await rpc('syncNickname', { id });
-          if (data && data.synced && data.account) {
+          const data = await rpc('renameAccount', { id, name: next });
+          if (data && data.account) {
             setAccounts(prev => (prev || []).map(a => a.id === data.account.id ? Object.assign({}, a, { name: data.account.name }) : a));
-            if (announce) notify('success', t('nicknameSynced'));
-            return true;
           }
-          if (announce) notify('info', t('nicknameNotFound'));
+          return true;
         } catch (e) {
-          NICK_SYNCED.delete(id);
-          if (announce) reportError(e);
+          reportError(e);
+          return false;
         }
-        return false;
       }
 
-      // One pass per account per session, sequential to stay gentle with IMAP.
-      async function autoSyncNicknames(list) {
-        for (const a of list || []) {
-          if (!a || !a.id || NICK_SYNCED.has(a.id)) continue;
-          NICK_SYNCED.add(a.id);
-          await syncNickname(a.id, false);
+      function startRename(account) {
+        setRenameId(account.id);
+        setRenameDraft(account.name || defaultAccountName(account.username));
+      }
+
+      function cancelRename() {
+        setRenameId('');
+        setRenameDraft('');
+      }
+
+      async function commitRename(id) {
+        const name = String(renameDraft || '').trim();
+        if (!name) { cancelRename(); return; }
+        setBusy(true);
+        try {
+          const ok = await renameAccount(id, name);
+          if (ok) { notify('success', t('saved')); cancelRename(); }
+        } finally {
+          setBusy(false);
         }
       }
 
@@ -1112,7 +1131,6 @@ window.__ModuleLoader__.load({
           const data = await rpc('listAccounts');
           setAccounts(data.accounts || []);
           if (!activeId && data.accounts && data.accounts.length) setActiveId(data.accounts[0].id);
-          void autoSyncNicknames(data.accounts);
         } catch (e) {
           reportError(e);
         }
@@ -1203,7 +1221,6 @@ window.__ModuleLoader__.load({
         const p = PRESETS[preset] || PRESETS.custom;
         setForm(Object.assign({}, form, {
           preset,
-          name: preset === 'custom' ? '' : t(p.nameKey),
           imapHost: p.imapHost,
           imapPort: p.imapPort,
           smtpHost: p.smtpHost,
@@ -1215,7 +1232,7 @@ window.__ModuleLoader__.load({
         setBusy(true);
         try {
           await rpc('saveAccount', {
-            name: form.name || form.username,
+            name: String(form.name || '').trim() || defaultAccountName(form.username),
             username: form.username,
             authCode: form.authCode,
             imapHost: form.imapHost,
@@ -1621,17 +1638,35 @@ window.__ModuleLoader__.load({
               h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
                 h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(a.username) } }, avatarLetter(a.name || a.username)),
                 h('div', { style: { flex: 1, minWidth: 0 } },
-                  h('div', { style: { fontWeight: 650 } }, a.name),
+                  renameId === a.id
+                    ? h('input', {
+                        className: 'dsh-mail-input',
+                        'data-testid': 'rename-input',
+                        value: renameDraft,
+                        autoFocus: true,
+                        placeholder: defaultAccountName(a.username),
+                        onChange: e => setRenameDraft(e.target.value),
+                        onKeyDown: e => { if (e.key === 'Enter') commitRename(a.id); if (e.key === 'Escape') cancelRename(); },
+                      })
+                    : h('div', { style: { fontWeight: 650 } }, a.name || a.username),
                   h('div', { className: 'dsh-mail-hint' }, a.username)
                 )
               ),
               h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, (a.imapHost || '') + ':' + a.imapPort + ' · ' + (a.smtpHost || '') + ':' + a.smtpPort),
-              h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-                h('button', { className: 'dsh-mail-btn', onClick: () => testAccount(a.id), disabled: busy }, h(Ico, { name: 'check', size: 14 }), t('test')),
-                h('button', { className: 'dsh-mail-btn', onClick: () => syncNickname(a.id, true), disabled: busy }, h(Ico, { name: 'refresh', size: 14 }), t('syncNickname')),
-                h('button', { className: 'dsh-mail-btn', onClick: () => { setActiveId(a.id); navTo('inbox'); } }, h(Ico, { name: 'inbox', size: 14 }), t('inbox')),
-                h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteAccount(a.id), disabled: busy }, h(Ico, { name: 'trash', size: 14 }), t('delete'))
-              )
+              renameId === a.id
+                ? h('div', null,
+                    h('div', { className: 'dsh-mail-hint', style: { marginBottom: 8 } }, t('renameHint')),
+                    h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+                      h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: () => commitRename(a.id), disabled: busy }, h(Ico, { name: 'check', size: 14 }), t('save')),
+                      h('button', { className: 'dsh-mail-btn', onClick: cancelRename, disabled: busy }, t('cancel'))
+                    )
+                  )
+                : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+                    h('button', { className: 'dsh-mail-btn', onClick: () => testAccount(a.id), disabled: busy }, h(Ico, { name: 'check', size: 14 }), t('test')),
+                    h('button', { className: 'dsh-mail-btn', onClick: () => startRename(a), disabled: busy }, h(Ico, { name: 'compose', size: 14 }), t('rename')),
+                    h('button', { className: 'dsh-mail-btn', onClick: () => { setActiveId(a.id); navTo('inbox'); } }, h(Ico, { name: 'inbox', size: 14 }), t('inbox')),
+                    h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteAccount(a.id), disabled: busy }, h(Ico, { name: 'trash', size: 14 }), t('delete'))
+                  )
             )),
             h('div', { className: 'dsh-mail-card' },
               h('div', { className: 'dsh-mail-cardhead' }, h(Ico, { name: 'plus', size: 16 }), t('addAccount')),
@@ -1646,7 +1681,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsh-mail-grid' },
                 h('div', { className: 'dsh-mail-field' },
                   h('span', { className: 'dsh-mail-label' }, t('name')),
-                  h('input', { className: 'dsh-mail-input', value: form.name, onChange: e => setForm(Object.assign({}, form, { name: e.target.value })) })
+                  h('input', { className: 'dsh-mail-input', value: form.name, placeholder: defaultAccountName(form.username) || 'me', onChange: e => setForm(Object.assign({}, form, { name: e.target.value })) })
                 ),
                 h('div', { className: 'dsh-mail-field' },
                   h('span', { className: 'dsh-mail-label' }, t('username')),

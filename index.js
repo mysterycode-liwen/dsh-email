@@ -220,17 +220,17 @@ async function handleRequest(ctx, request) {
         }));
         return json({ ok: true, account: publicAccount(id, payload) });
       }
-      case 'syncNickname': {
-        // Discover the account's own display name from its sent mail so the
-        // label matches what the provider's web UI shows, then persist it.
+      case 'renameAccount': {
+        // The account label is user-chosen and local to this machine, so nothing
+        // is read from the mailbox or any online profile API.
         const id = String(body.id || '');
+        const name = String(body.name || '').trim();
+        if (!id) return json({ ok: false, error: 'id is required' }, 400);
+        if (!name) return json({ ok: false, error: 'name is required' }, 400);
         const payload = await getAccountPayload(ctx, id);
-        const found = await runBridge('syncNickname', { account: bridgeAccount(payload) });
-        const name = found && found.ok ? String(found.name || '').trim() : '';
-        if (!name) return json({ ok: true, synced: false, account: publicAccount(id, payload) });
         const next = Object.assign({}, payload, { name });
         await ctx.credentials.modifyRecord(recordKey(id), async () => ({ kind: 'grant', payload: next }));
-        return json({ ok: true, synced: true, account: publicAccount(id, next) });
+        return json({ ok: true, account: publicAccount(id, next) });
       }
       case 'deleteAccount': {
         const id = String(body.id || '');

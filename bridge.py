@@ -12,7 +12,6 @@ Operations
   listMessages list recent messages from a mailbox folder
   getMessage   fetch one message's full body by UID
   getAttachment  download one attachment of a message as base64
-  syncNickname   discover the account's display name from its own sent mail
   sendMessage  send a message over SMTP (with attachments)
   listSent     read the server's Sent folder (cross-device sync)
   getContacts  read the synced contacts stored on the mail server
@@ -801,78 +800,6 @@ def op_send_message(req):
     return {"ok": True}
 
 
-def _collect_display_names(client, folder, own_address, limit):
-    """Display names this account uses when it sends mail.
-
-    Scanning the Sent folder for our own From header yields the nickname the
-    user actually chose in the provider's web UI (e.g. \"李文\"), which is a far
-    better account label than a generic preset such as \"QQ邮箱\".
-    """
-    names = []
-    try:
-        typ, _ = client.select('"%s"' % folder.replace('"', ""), readonly=True)
-        if typ != "OK":
-            return names
-        typ, data = client.uid("SEARCH", None, "ALL")
-        if typ != "OK" or not data or not data[0]:
-            return names
-        ids = data[0].split()[-limit:]
-        for uid in reversed(ids):
-            try:
-                typ, md = client.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
-                if typ != "OK" or not md or md[0] is None:
-                    continue
-                head = md[0][1]
-                if isinstance(head, bytes):
-                    head = head.decode("utf-8", errors="replace")
-                from email import message_from_string
-                m = message_from_string(head)
-                for name, addr in getaddresses([m.get("From") or ""]):
-                    addr = (addr or "").strip().lower()
-                    if addr != own_address:
-                        continue
-                    label = dec(name).strip().strip('"').strip()
-                    if label and label.lower() != addr:
-                        names.append(label)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return names
-
-
-def op_sync_nickname(req):
-    """Best-effort account nickname discovery from the mailbox itself."""
-    acc = req["account"]
-    limit = max(5, min(int(req.get("limit") or 25), 60))
-    own = str(acc.get("username") or "").strip().lower()
-    if not own:
-        return {"ok": True, "name": ""}
-    try:
-        client = imap_connect(acc)
-    except Exception as exc:
-        return fail_result(exc)
-    try:
-        names = []
-        for folder in (_sent_folders(client) or []) + ["INBOX"]:
-            try:
-                names.extend(_collect_display_names(client, folder, own, limit))
-            except Exception:
-                continue
-            if len(names) >= 5:
-                break
-        if not names:
-            return {"ok": True, "name": ""}
-        # Most frequent wins; ties resolve to the most recent occurrence.
-        counts = {}
-        for n in names:
-            counts[n] = counts.get(n, 0) + 1
-        best = max(counts.items(), key=lambda kv: (kv[1], -names.index(kv[0])))[0]
-        return {"ok": True, "name": best}
-    finally:
-        _imap_close(client)
-
-
 def op_collect_contacts(req):
     """Scan IMAP folders for addresses and return unique {name,email} entries."""
     acc = req["account"]
@@ -1176,7 +1103,6 @@ OPS = {
     "getMessage": op_get_message,
     "sendMessage": op_send_message,
     "getAttachment": op_get_attachment,
-    "syncNickname": op_sync_nickname,
     "listSent": op_list_sent,
     "getContacts": op_get_contacts,
     "setContacts": op_set_contacts,
