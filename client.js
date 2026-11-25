@@ -38,9 +38,6 @@ window.__ModuleLoader__.load({
       };
       const known = Object.prototype.hasOwnProperty.call(map, info.code);
       const head = known ? map[info.code] : t('errGeneric');
-      // For known errors the friendly message already explains every possible
-      // cause, so hide the raw protocol text (it is long, English and scares
-      // users). Only unknown errors keep the raw detail, as a diagnostic hint.
       const raw = String(info.error || '').trim();
       const detail = (!known && raw && raw !== head) ? '\n' + t('errDetail') + raw : '';
       return stage + head + detail;
@@ -96,7 +93,6 @@ window.__ModuleLoader__.load({
       errNotFound: '未找到这封邮件，它可能已被删除。',
       errGeneric: '操作失败，请稍后重试。',
       errDetail: '服务器返回：',
-      // Sent box & contacts
       sent: '发件箱',
       contacts: '联系人',
       noSent: '还没有已发送的邮件。',
@@ -111,7 +107,6 @@ window.__ModuleLoader__.load({
       saved: '已保存。',
       selectContact: '用此地址写邮件',
       attached: '附件',
-      // AI assistant mail access settings card
       settingsTitle: '邮件插件设置',
       settingsDescription: '配置 AI 助手是否可以读取你的邮箱。',
       agentMailAccessLabel: '允许 AI 助手查询邮箱',
@@ -174,7 +169,6 @@ window.__ModuleLoader__.load({
       errNotFound: 'This message was not found — it may have been deleted.',
       errGeneric: 'The operation failed. Please try again later.',
       errDetail: 'Server said: ',
-      // Sent box & contacts
       sent: 'Sent',
       contacts: 'Contacts',
       noSent: 'No sent messages yet.',
@@ -189,7 +183,6 @@ window.__ModuleLoader__.load({
       saved: 'Saved.',
       selectContact: 'Compose to this address',
       attached: 'Attachments',
-      // AI assistant mail access settings card
       settingsTitle: 'Mail settings',
       settingsDescription: 'Control whether the AI assistant may read your mailbox.',
       agentMailAccessLabel: 'Allow AI assistant to query mail',
@@ -203,109 +196,120 @@ window.__ModuleLoader__.load({
       settingsSaveFailed: 'The deployment did not accept this value; please try again.',
     };
 
-    const S = {
-      root: { display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-base)', fontFamily: 'inherit', fontSize: 13 },
-      header: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l1)', background: 'var(--dsw-alias-bg-layer-1)' },
-      title: { fontWeight: 600, fontSize: 15 },
-      spacer: { flex: 1 },
-      // Buttons use CSS classes (not inline styles) so :hover / :active states
-      // can give clear click feedback. Fixed colors guarantee the text and
-      // background are never similar, whatever the host theme variables are.
-      btnCss: [
-        '.dsh-mail-btn {',
-        '  border: 1px solid #4b5563 !important;',
-        '  border-radius: 6px;',
-        '  padding: 6px 12px;',
-        '  font-size: 12px;',
-        '  font-weight: 600;',
-        '  line-height: 1.4;',
-        '  cursor: pointer;',
-        '  transition: background-color .12s, box-shadow .12s, transform .06s;',
-        '  background-color: #e5e7eb !important;',
-        '  color: #111827 !important;',
-        '}',
-        '.dsh-mail-btn:hover:not(:disabled) { background-color: #d1d5db !important; border-color: #1f2937 !important; }',
-        '.dsh-mail-btn:active:not(:disabled) { background-color: #9ca3af !important; transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,.25); }',
-        '.dsh-mail-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }',
-        '.dsh-mail-btn:disabled { opacity: .5; cursor: not-allowed; }',
-        '.dsh-mail-btn-primary { background-color: #1d4ed8 !important; border-color: #1e3a8a !important; color: #ffffff !important; }',
-        '.dsh-mail-btn-primary:hover:not(:disabled) { background-color: #1e40af !important; }',
-        '.dsh-mail-btn-primary:active:not(:disabled) { background-color: #172554 !important; }',
-        '.dsh-mail-btn-danger { background-color: #b91c1c !important; border-color: #7f1d1d !important; color: #ffffff !important; }',
-        '.dsh-mail-btn-danger:hover:not(:disabled) { background-color: #991b1b !important; }',
-        '.dsh-mail-btn-danger:active:not(:disabled) { background-color: #7f1d1d !important; }',
-        '.dsh-mail-pill {',
-        '  border: 1px solid #6b7280 !important;',
-        '  border-radius: 12px;',
-        '  padding: 4px 10px;',
-        '  font-size: 11px;',
-        '  font-weight: 600;',
-        '  cursor: pointer;',
-        '  background-color: #f3f4f6 !important;',
-        '  color: #1f2937 !important;',
-        '  transition: background-color .12s, transform .06s;',
-        '}',
-        '.dsh-mail-pill:hover { background-color: #dbeafe !important; border-color: #2563eb !important; }',
-        '.dsh-mail-pill:active { background-color: #bfdbfe !important; transform: translateY(1px); }',
-        '.dsh-mail-pill.is-active { background-color: #1d4ed8 !important; border-color: #1e3a8a !important; color: #ffffff !important; }',
-        '.dsh-mail-pill.is-active:hover { background-color: #1e40af !important; }',
-        '.dsh-mail-pill.is-active:active { background-color: #172554 !important; }',
-        // List rows: hover uses a dark background with forced white text so
-        // the text can never blend into the highlight (host themes may use
-        // light text colors, which were nearly invisible on light gray).
-        '.dsh-mail-item:hover { background-color: #1d4ed8 !important; }',
-        '.dsh-mail-item:hover * { color: #ffffff !important; }',
-        '.dsh-mail-item:active { background-color: #172554 !important; }',
-        '.dsh-mail-item:active * { color: #ffffff !important; }',
-        // Loading feedback: a spinning indicator, a sliding top progress bar,
-        // and a gentle fade-in so data does not appear abruptly.
-        '.dsh-mail-spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--dsw-alias-border-l2); border-top-color: #2563eb; border-radius: 50%; animation: dsh-mail-spin .7s linear infinite; }',
-        '@keyframes dsh-mail-spin { to { transform: rotate(360deg); } }',
-        '.dsh-mail-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 44px 16px; color: var(--dsw-alias-label-secondary); animation: dsh-mail-fade .25s ease-out; }',
-        '@keyframes dsh-mail-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }',
-        '.dsh-mail-progress { position: relative; height: 3px; overflow: hidden; background: var(--dsw-alias-bg-layer-1); }',
-        '.dsh-mail-progress::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; background: #2563eb; animation: dsh-mail-slide 1.1s ease-in-out infinite; }',
-        '@keyframes dsh-mail-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }',
-        '.dsh-mail-view { animation: dsh-mail-fade .2s ease-out; }',
-        '@media (prefers-reduced-motion: reduce) { .dsh-mail-spinner, .dsh-mail-progress::after, .dsh-mail-loading, .dsh-mail-view { animation: none; } }',
-      ].join('\n'),
-      body: { flex: 1, overflow: 'auto', padding: 16 },
-      card: { border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8, padding: 12, marginBottom: 10, background: 'var(--dsw-alias-bg-layer-1)' },
-      row: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 },
-      field: { display: 'flex', flexDirection: 'column', gap: 4, flex: 1 },
-      label: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' },
-      input: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: '7px 9px', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', fontSize: 13, width: '100%', boxSizing: 'border-box' },
-      textarea: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: '7px 9px', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', fontSize: 13, width: '100%', boxSizing: 'border-box', minHeight: 180, resize: 'vertical' },
-      hint: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.5 },
-      msg: { fontSize: 12, padding: '6px 10px', borderRadius: 6, marginBottom: 10, whiteSpace: 'pre-wrap', lineHeight: 1.5 },
-      error: { background: 'var(--dsw-alias-state-error-primary)', color: '#fff' },
-      success: { background: 'var(--dsw-alias-state-success-primary)', color: '#fff' },
-      item: { borderBottom: '1px solid var(--dsw-alias-border-l1)', padding: '10px 4px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 3 },
-      subject: { fontWeight: 600 },
-      muted: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' },
-      snippet: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      pill: { fontSize: 11, padding: '3px 8px', borderRadius: 12, border: '1px solid var(--dsw-alias-border-l2)', cursor: 'pointer' },
-      select: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: '5px 8px', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', fontSize: 12 },
-      detailWrap: { width: '100%', maxWidth: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', alignItems: 'stretch' },
-      detailHead: { textAlign: 'center', marginTop: 12, marginBottom: 4 },
-      detailMeta: { textAlign: 'center', marginBottom: 16 },
-      mailBody: { width: '100%', boxSizing: 'border-box', lineHeight: 1.8, padding: 16, border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center' },
-      // 邮件正文是第三方 HTML，常带写死的颜色（多为白底深字）。主题切到暗色后
-      // 这些固定色会与容器背景撞色。下面用 !important 强制所有子元素改用 DSH
-      // 自带的高对比主题变量（文字 label-primary / 透明背景），明/暗主题都清晰。
-      // 双写类名用于压过部分邮件内联 <style> 注入的样式。
-      mailHtmlCss: [
-        '.dsh-mail-html { text-align: center; }',
-        // 统一改色/透明背景时排除按钮和链接（含其子元素）：邮件里自带样式的
-        // CTA 按钮要保留原本的外观与 :hover/:active 等交互效果，不能被抹掉。
-        '.dsh-mail-html.dsh-mail-html *:not(button, button *, a, a *, [role="button"], [role="button"] *) { max-width: 100% !important; box-sizing: border-box !important; color: var(--dsw-alias-label-primary) !important; background-color: transparent !important; border-color: var(--dsw-alias-border-l2) !important; }',
-        '.dsh-mail-html.dsh-mail-html a, .dsh-mail-html.dsh-mail-html a * { color: var(--dsw-alias-brand-primary) !important; text-decoration: underline; cursor: pointer; }',
-        '.dsh-mail-html img { max-width: 100%; height: auto; border-radius: 6px; }',
-        '.dsh-mail-html p, .dsh-mail-html div { margin: 0 0 8px; }',
-        '.dsh-mail-html table { max-width: 100%; border-collapse: collapse; }',
-        '.dsh-mail-html blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--dsw-alias-border-l2) !important; }',
-      ].join('\n'),
-    };
+    // ---------------------------------------------------------------------
+    // Visual layer. Everything is class-based and scoped under .dsh-mail so
+    // it cannot leak into the host app. Colors come only from DSH theme
+    // tokens, so light/dark themes both look native. Interaction feedback
+    // uses transform/opacity/brightness (theme-independent) instead of the
+    // hardcoded gray buttons the previous version had.
+    // ---------------------------------------------------------------------
+    const CSS = [
+      '.dsh-mail { display:flex; flex-direction:column; height:100%; box-sizing:border-box; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); font-family:inherit; font-size:13px; line-height:1.5; }',
+      '.dsh-mail * { box-sizing:border-box; }',
+      '.dsh-mail button, .dsh-mail input, .dsh-mail textarea, .dsh-mail select { font-family:inherit; }',
+      '.dsh-mail-spacer { flex:1; min-width:0; }',
+
+      /* top bar */
+      '.dsh-mail-topbar { display:flex; align-items:center; gap:12px; padding:14px 18px 13px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); }',
+      '.dsh-mail-brand { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:650; letter-spacing:.2px; }',
+      '.dsh-mail-brandmark { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; background:var(--dsw-alias-brand-primary); color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.14); }',
+      '.dsh-mail-brandsub { font-size:11px; color:var(--dsw-alias-label-secondary); font-weight:400; }',
+
+      /* buttons */
+      '.dsh-mail-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:7px 12px; font-size:12px; font-weight:600; line-height:1.4; cursor:pointer; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); transition:filter .12s, transform .06s, box-shadow .12s; white-space:nowrap; }',
+      '.dsh-mail-btn:hover:not(:disabled) { filter:brightness(.94); }',
+      '.dsh-mail-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 5px rgba(0,0,0,.12); }',
+      '.dsh-mail-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }',
+      '.dsh-mail-btn:disabled { opacity:.45; cursor:not-allowed; }',
+      '.dsh-mail-btn-primary { background:var(--dsw-alias-brand-primary); border-color:transparent; color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.16); }',
+      '.dsh-mail-btn-primary:hover:not(:disabled) { filter:brightness(1.08); }',
+      '.dsh-mail-btn-danger { color:var(--dsw-alias-state-error-primary); border-color:var(--dsw-alias-state-error-primary); background:transparent; }',
+      '.dsh-mail-btn-danger:hover:not(:disabled) { filter:none; background:var(--dsw-alias-state-error-primary); color:#fff; }',
+      '.dsh-mail-iconbtn { width:30px; height:30px; padding:0; border-radius:8px; }',
+
+      /* segmented navigation */
+      '.dsh-mail-tabs { display:flex; align-items:center; gap:2px; padding:0 12px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); overflow-x:auto; }',
+      '.dsh-mail-tab { position:relative; display:inline-flex; align-items:center; gap:7px; padding:11px 13px 12px; border:0; background:transparent; color:var(--dsw-alias-label-secondary); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:color .12s; }',
+      '.dsh-mail-tab:hover { color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-tab.is-active { color:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-tab.is-active::after { content:""; position:absolute; left:10px; right:10px; bottom:0; height:2px; border-radius:2px 2px 0 0; background:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-badge { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-brand-primary); color:#fff; font-size:10px; font-weight:700; }',
+
+      /* account chip */
+      '.dsh-mail-accountbar { display:flex; align-items:center; gap:9px; padding:9px 16px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
+      '.dsh-mail-select { flex:1; min-width:0; max-width:320px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:6px 9px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); font-size:12px; cursor:pointer; }',
+
+      /* message list */
+      '.dsh-mail-list { flex:1; min-height:0; overflow:auto; padding:6px 8px 18px; }',
+      '.dsh-mail-row { display:flex; align-items:flex-start; gap:11px; padding:12px 11px; border-radius:11px; border:1px solid transparent; cursor:pointer; transition:background .12s, border-color .12s; }',
+      '.dsh-mail-row:hover { background:var(--dsw-alias-bg-layer-2); }',
+      '.dsh-mail-row:active { transform:scale(.995); }',
+      '.dsh-mail-avatar { width:36px; height:36px; flex:none; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:14px; font-weight:700; box-shadow:inset 0 -6px 10px rgba(0,0,0,.10); }',
+      '.dsh-mail-rowmain { flex:1; min-width:0; }',
+      '.dsh-mail-rowtop { display:flex; align-items:baseline; gap:8px; }',
+      '.dsh-mail-from { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:13px; }',
+      '.dsh-mail-time { flex:none; font-size:11px; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-subject { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; }',
+      '.dsh-mail-preview { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-unread { width:8px; height:8px; margin-top:7px; flex:none; border-radius:50%; background:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-read .dsh-mail-from, .dsh-mail-read .dsh-mail-subject { color:var(--dsw-alias-label-secondary); font-weight:500; }',
+
+      /* cards / forms */
+      '.dsh-mail-card { border:1px solid var(--dsw-alias-border-l1); border-radius:12px; padding:16px; margin-bottom:12px; background:var(--dsw-alias-bg-layer-1); box-shadow:0 1px 3px rgba(0,0,0,.05); }',
+      '.dsh-mail-cardhead { display:flex; align-items:center; gap:8px; margin-bottom:14px; font-size:14px; font-weight:650; }',
+      '.dsh-mail-grid { display:flex; gap:12px; flex-wrap:wrap; }',
+      '.dsh-mail-field { display:flex; flex-direction:column; gap:5px; flex:1; min-width:160px; margin-bottom:11px; }',
+      '.dsh-mail-label { font-size:11px; font-weight:600; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-input, .dsh-mail-textarea, .dsh-mail-selectinput { width:100%; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:8px 10px; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); font-size:13px; transition:border-color .12s, box-shadow .12s; }',
+      '.dsh-mail-input:focus, .dsh-mail-textarea:focus, .dsh-mail-selectinput:focus { outline:none; border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }',
+      '.dsh-mail-textarea { min-height:200px; resize:vertical; line-height:1.6; }',
+      '.dsh-mail-hint { font-size:11.5px; color:var(--dsw-alias-label-secondary); line-height:1.6; }',
+
+      /* presets */
+      '.dsh-mail-pill { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--dsw-alias-border-l2); border-radius:999px; padding:5px 12px; font-size:11.5px; font-weight:600; cursor:pointer; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-secondary); transition:all .12s; }',
+      '.dsh-mail-pill:hover { color:var(--dsw-alias-label-primary); border-color:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-pill:active { transform:translateY(1px); }',
+      '.dsh-mail-pill.is-active { background:var(--dsw-alias-brand-primary); border-color:transparent; color:#fff; }',
+
+      /* flash */
+      '.dsh-mail-flash { display:flex; align-items:flex-start; gap:8px; margin:12px 16px 0; padding:10px 12px; border-radius:9px; font-size:12px; line-height:1.55; white-space:pre-wrap; }',
+      '.dsh-mail-flash-error { background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent); color:var(--dsw-alias-state-error-primary); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); }',
+      '.dsh-mail-flash-success { background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent); color:var(--dsw-alias-state-success-primary); border:1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent); }',
+
+      /* empty & loading */
+      '.dsh-mail-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:64px 28px; text-align:center; }',
+      '.dsh-mail-emptyicon { width:56px; height:56px; border-radius:18px; display:grid; place-items:center; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); margin-bottom:4px; }',
+      '.dsh-mail-emptytitle { font-size:14px; font-weight:650; color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-emptysub { font-size:12px; color:var(--dsw-alias-label-secondary); max-width:320px; line-height:1.6; }',
+      '.dsh-mail-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:56px 16px; color:var(--dsw-alias-label-secondary); animation:dsh-mail-fade .25s ease-out; }',
+      '.dsh-mail-spinner { display:inline-block; width:20px; height:20px; border:2px solid var(--dsw-alias-border-l2); border-top-color:var(--dsw-alias-brand-primary); border-radius:50%; animation:dsh-mail-spin .7s linear infinite; }',
+      '@keyframes dsh-mail-spin { to { transform:rotate(360deg); } }',
+      '@keyframes dsh-mail-fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }',
+      '.dsh-mail-progress { position:relative; height:3px; overflow:hidden; background:var(--dsw-alias-bg-layer-1); }',
+      '.dsh-mail-progress::after { content:""; position:absolute; top:0; bottom:0; left:0; width:40%; background:var(--dsw-alias-brand-primary); animation:dsh-mail-slide 1.1s ease-in-out infinite; }',
+      '@keyframes dsh-mail-slide { 0% { transform:translateX(-100%); } 100% { transform:translateX(350%); } }',
+      '.dsh-mail-view { flex:1; min-height:0; display:flex; flex-direction:column; animation:dsh-mail-fade .2s ease-out; }',
+      '.dsh-mail-scroll { flex:1; min-height:0; overflow:auto; padding:16px; }',
+      '@media (prefers-reduced-motion: reduce) { .dsh-mail-spinner, .dsh-mail-progress::after, .dsh-mail-loading, .dsh-mail-view { animation:none; } }',
+
+      /* detail */
+      '.dsh-mail-detailhead { padding:20px 4px 14px; border-bottom:1px solid var(--dsw-alias-border-l1); margin-bottom:16px; }',
+      '.dsh-mail-detailtitle { margin:0 0 12px; font-size:20px; font-weight:650; line-height:1.4; }',
+      '.dsh-mail-detailfrom { display:flex; align-items:center; gap:10px; }',
+      '.dsh-mail-detailmeta { font-size:11.5px; color:var(--dsw-alias-label-secondary); margin-top:2px; }',
+      '.dsh-mail-mailbody { width:100%; padding:18px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }',
+
+      // Third-party HTML: force theme colors so hardcoded mail colors (usually
+      // white bg / dark text) never clash with the dark theme. Buttons and links
+      // keep their own styling so CTA buttons stay interactive.
+      '.dsh-mail-html { text-align:left; }',
+      '.dsh-mail-html.dsh-mail-html *:not(button, button *, a, a *, [role="button"], [role="button"] *) { max-width:100% !important; box-sizing:border-box !important; color:var(--dsw-alias-label-primary) !important; background-color:transparent !important; border-color:var(--dsw-alias-border-l2) !important; }',
+      '.dsh-mail-html.dsh-mail-html a, .dsh-mail-html.dsh-mail-html a * { color:var(--dsw-alias-brand-primary) !important; text-decoration:underline; cursor:pointer; }',
+      '.dsh-mail-html img { max-width:100%; height:auto; border-radius:6px; }',
+      '.dsh-mail-html p, .dsh-mail-html div { margin:0 0 8px; }',
+      '.dsh-mail-html table { max-width:100%; border-collapse:collapse; }',
+      '.dsh-mail-html blockquote { margin:8px 0; padding-left:12px; border-left:3px solid var(--dsw-alias-border-l2) !important; }',
+    ].join('\n');
 
     const PRESETS = {
       qq: { nameKey: 'qq', imapHost: 'imap.qq.com', imapPort: 993, smtpHost: 'smtp.qq.com', smtpPort: 465 },
@@ -324,11 +328,11 @@ window.__ModuleLoader__.load({
       detail: null,
       form: null,
       compose: { to: '', subject: '', body: '' },
-      loadedId: '', // account id whose message list is currently cached
+      loadedId: '',
       sent: [],
       contacts: [],
       contactForm: { name: '', email: '' },
-      loadedIds: { inbox: '', sent: '', contacts: '' }, // per-view cached account ids
+      loadedIds: { inbox: '', sent: '', contacts: '' },
     };
     function usePersistent(key, initial) {
       // `!= null` treats both null and undefined as "not cached yet", so the
@@ -342,16 +346,72 @@ window.__ModuleLoader__.load({
       return [value, update];
     }
 
+    // Solid envelope for the sidebar panel icon (the sidebar draws its own
+    // button; this component only renders the glyph).
     function Icon({ size, active }) {
       return h('svg', { viewBox: '0 0 24 24', width: size || 20, height: size || 20, 'aria-hidden': true, style: { display: 'block' } },
         h('path', { fill: active ? 'var(--dsw-alias-brand-primary)' : 'currentColor', d: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm9 8.2L4.2 7h15.6L12 13.2zM4 8.3V17h16V8.3l-8 6.1-8-6.1z' })
       );
     }
 
+    // Stroke-style glyphs for in-panel navigation (unified icon language).
+    const ICONS = {
+      inbox: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm0 11v5h16v-5h-5a3 3 0 0 1-6 0H4z',
+      sent: 'M21 3L3 10.5l7 2.5 2.5 7L21 3zM10 13l4-4',
+      contacts: 'M16 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 18.5V20M11 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM20 20v-1.5a3.5 3.5 0 0 0-2.6-3.38M16 3.6a3.5 3.5 0 0 1 0 6.8',
+      accounts: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 12c0-.4-.04-.8-.11-1.18l2.03-1.58-2-3.47-2.4.97a7 7 0 0 0-2.02-1.17L14.6 3h-4l-.3 2.57a7 7 0 0 0-2.03 1.17l-2.4-.97-2 3.47 2.03 1.58A8 8 0 0 0 6 12c0 .4.04.8.11 1.18l-2.03 1.58 2 3.47 2.4-.97c.62.51 1.3.9 2.02 1.17l.3 2.57h4l.31-2.57c.72-.27 1.4-.66 2.02-1.17l2.39.97 2-3.47-2.02-1.58c.07-.38.11-.78.11-1.18z',
+      compose: 'M4 20h4l10.6-10.6a2.1 2.1 0 0 0-3-3L5 17v3zM14.5 6.5l3 3',
+      refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6',
+      back: 'M15 18l-6-6 6-6',
+      trash: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7M10 11v6m4-6v6',
+      mail: 'M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm9 7L3.5 7.5h17L12 13z',
+      user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+      users: 'M16 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 18.5V20M11 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
+      check: 'M4 12l5 5L20 6',
+      warning: 'M12 3L2 20h20L12 3zm0 6v5m0 3v.5',
+      plus: 'M12 5v14M5 12h14',
+    };
+    function Ico(name, size) {
+      return h('svg', {
+        viewBox: '0 0 24 24', width: size || 18, height: size || 18, 'aria-hidden': true,
+        style: { display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' },
+      }, h('path', { d: ICONS[name] || ICONS.mail }));
+    }
+
+    const AVATAR_COLORS = ['#6366f1', '#0891b2', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0d9488', '#e11d48'];
+    function avatarColor(seed) {
+      let hash = 0;
+      const s = String(seed || '');
+      for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+      return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+    }
+    function avatarLetter(s) {
+      const v = String(s || '').trim();
+      return v ? v.charAt(0).toUpperCase() : '?';
+    }
+    function fmtDate(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso).slice(0, 16);
+      const now = new Date();
+      const hh = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+      if (d.toDateString() === now.toDateString()) return hh;
+      if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '/' + d.getDate();
+      return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate();
+    }
+
     function Loading(label) {
       return h('div', { className: 'dsh-mail-loading' },
         h('div', { className: 'dsh-mail-spinner' }),
         h('span', null, label || t('loading'))
+      );
+    }
+
+    function Empty({ icon, title, sub }) {
+      return h('div', { className: 'dsh-mail-empty' },
+        h('div', { className: 'dsh-mail-emptyicon' }, h(Ico, { name: icon, size: 26 })),
+        h('div', { className: 'dsh-mail-emptytitle' }, title),
+        sub ? h('div', { className: 'dsh-mail-emptysub' }, sub) : null
       );
     }
 
@@ -362,9 +422,6 @@ window.__ModuleLoader__.load({
       const [messages, setMessages] = usePersistent('messages', []);
       const [detail, setDetail] = usePersistent('detail', null);
       const [busy, setBusy] = useState(false);
-      // Loading is tracked per fetch, so the indicator stays until THAT
-      // request resolves (the global `busy` is shared by save/send/delete
-      // and by three concurrent account-switch loads).
       const [loadingMessages, setLoadingMessages] = useState(false);
       const [loadingSent, setLoadingSent] = useState(false);
       const [loadingContacts, setLoadingContacts] = useState(false);
@@ -460,7 +517,7 @@ window.__ModuleLoader__.load({
 
       // Only (re)load the list when the ACCOUNT actually changes — never on
       // view changes (inbox→detail→inbox), so entering a mail no longer blanks
-      // it and returning does not refetch. PERSIST.loadedId guards remounts.
+      // it and returning does not refetch. PERSIST.loadedIds guards remounts.
       useEffect(() => {
         if (!activeId) {
           setMessages([]);
@@ -476,8 +533,6 @@ window.__ModuleLoader__.load({
           setContacts([]);
           setDetail(null);
           PERSIST.loadedIds = { inbox: activeId, sent: activeId, contacts: activeId };
-          // Every view is tied to an account; loading all three keeps data in
-          // sync when the user switches accounts or the active view changes.
           loadMessages();
           loadSent();
           loadContacts();
@@ -583,8 +638,6 @@ window.__ModuleLoader__.load({
         try {
           const data = await rpc('saveContact', { id: activeId, email, name: contactForm.name });
           setContactForm({ name: '', email: '' });
-          // Use the authoritative response; never re-fetch, which could bring
-          // back a stale copy from a server-side sync record.
           if (Array.isArray(data.contacts)) setContacts(data.contacts);
           notify('success', t('saved'));
         } catch (e) {
@@ -596,22 +649,22 @@ window.__ModuleLoader__.load({
 
       async function deleteContact(email) {
         setBusy(true);
-        // Remove from the visible list immediately so the action always takes
-        // effect, even before the request completes.
         const next = contacts.filter(c => String(c.email).toLowerCase() !== String(email).toLowerCase());
         setContacts(next);
         try {
           const data = await rpc('deleteContact', { id: activeId, email });
-          // Trust the response over any further read: a stale server-side sync
-          // copy would otherwise re-add the contact we just removed.
           if (Array.isArray(data.contacts)) setContacts(data.contacts);
         } catch (e) {
-          // Keep the optimistic removal on failure; re-adding a deleted
-          // contact is worse than showing the local list until next refresh.
           reportError(e);
         } finally {
           setBusy(false);
         }
+      }
+
+      function refreshCurrent() {
+        if (view === 'sent') loadSent();
+        else if (view === 'contacts') loadContacts();
+        else loadMessages();
       }
 
       function composeTo(email) {
@@ -620,166 +673,287 @@ window.__ModuleLoader__.load({
       }
 
       const account = (accounts || []).find(a => a.id === activeId);
+      const unread = (messages || []).filter(m => m && m.seen === false).length;
+      const tabs = [
+        { key: 'inbox', icon: 'inbox', label: t('inbox'), badge: unread },
+        { key: 'sent', icon: 'sent', label: t('sent') },
+        { key: 'contacts', icon: 'users', label: t('contacts') },
+        { key: 'accounts', icon: 'accounts', label: t('accounts') },
+      ];
+      const isList = view === 'inbox' || view === 'sent' || view === 'contacts' || view === 'accounts';
 
-      return h('div', { style: S.root },
-        h('style', null, S.btnCss),
+      function navTo(key) {
+        setSentDetail(null);
+        setView(key);
+      }
+
+      return h('div', { className: 'dsh-mail' },
+        h('style', null, CSS),
         (loadingMessages || loadingSent || loadingContacts) && h('div', { className: 'dsh-mail-progress' }),
-        h('div', { style: S.header },
-          h('span', { style: S.title }, t('label')),
-          h('span', { style: S.spacer }),
-          h('button', { className: 'dsh-mail-btn', onClick: () => setView('accounts') }, t('accounts')),
-          h('button', { className: 'dsh-mail-btn', onClick: () => setView('sent'), disabled: !activeId }, t('sent')),
-          h('button', { className: 'dsh-mail-btn', onClick: () => setView('contacts'), disabled: !activeId }, t('contacts')),
-          h('button', { className: 'dsh-mail-btn', onClick: () => setView(view === 'compose' ? 'inbox' : 'compose'), disabled: !activeId }, t('compose'))
-        ),
-        flash && h('div', { style: Object.assign({}, S.msg, flash.kind === 'error' ? S.error : S.success) }, flash.text),
 
-        view === 'accounts' && h('div', { className: 'dsh-mail-view', style: S.body },
-          (accounts || []).map(a => h('div', { key: a.id, style: S.card },
-            h('div', { style: S.row },
-              h('strong', null, a.name),
-              h('span', { style: S.muted }, ' ' + a.username)
-            ),
-            h('div', { style: S.hint }, (a.imapHost || '') + ':' + a.imapPort + ' · ' + (a.smtpHost || '') + ':' + a.smtpPort),
-            h('div', { style: Object.assign({}, S.row, { marginTop: 10 }) },
-              h('button', { className: 'dsh-mail-btn', onClick: () => testAccount(a.id), disabled: busy }, t('test')),
-              h('button', { className: 'dsh-mail-btn', onClick: () => { setActiveId(a.id); setView('inbox'); } }, t('inbox')),
-              h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteAccount(a.id), disabled: busy }, t('delete'))
-            )
-          )),
-          h('div', { style: S.card },
-            h('div', { style: Object.assign({}, S.row, { marginBottom: 12 }) }, h('strong', null, t('addAccount'))),
-            h('div', { style: S.hint, marginBottom: 10 }, t('note')),
-            h('div', { style: S.row },
-              Object.keys(PRESETS).map(k => h('button', {
-                key: k, type: 'button', 'aria-pressed': form.preset === k,
-                className: 'dsh-mail-pill' + (form.preset === k ? ' is-active' : ''),
-                onClick: () => applyPreset(k),
-              }, t(k)))
-            ),
-            h('div', { style: S.row },
-              h('div', { style: S.field }, h('span', { style: S.label }, t('name')), h('input', { style: S.input, value: form.name, onChange: e => setForm(Object.assign({}, form, { name: e.target.value })) })),
-              h('div', { style: S.field }, h('span', { style: S.label }, t('username')), h('input', { style: S.input, value: form.username, placeholder: 'me@qq.com', onChange: e => setForm(Object.assign({}, form, { username: e.target.value })) }))
-            ),
-            h('div', { style: S.field, marginBottom: 8 }, h('span', { style: S.label }, t('authCode')), h('input', { style: S.input, type: 'password', value: form.authCode, onChange: e => setForm(Object.assign({}, form, { authCode: e.target.value })) })),
-            h('div', { style: S.row },
-              h('div', { style: S.field }, h('span', { style: S.label }, t('imapHost')), h('input', { style: S.input, value: form.imapHost, onChange: e => setForm(Object.assign({}, form, { imapHost: e.target.value })) })),
-              h('div', { style: { flex: '0 0 90px' } }, h('span', { style: S.label }, t('imapPort')), h('input', { style: S.input, value: form.imapPort, onChange: e => setForm(Object.assign({}, form, { imapPort: e.target.value })) }))
-            ),
-            h('div', { style: S.row },
-              h('div', { style: S.field }, h('span', { style: S.label }, t('smtpHost')), h('input', { style: S.input, value: form.smtpHost, onChange: e => setForm(Object.assign({}, form, { smtpHost: e.target.value })) })),
-              h('div', { style: { flex: '0 0 90px' } }, h('span', { style: S.label }, t('smtpPort')), h('input', { style: S.input, value: form.smtpPort, onChange: e => setForm(Object.assign({}, form, { smtpPort: e.target.value })) }))
-            ),
-            h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: saveAccount, disabled: busy || !form.username || !form.authCode }, t('save'))
-          )
+        // Brand header + primary action
+        h('div', { className: 'dsh-mail-topbar' },
+          h('div', { className: 'dsh-mail-brand' },
+            h('div', { className: 'dsh-mail-brandmark' }, h(Ico, { name: 'mail', size: 18 })),
+            h('div', null, t('label'), h('div', { className: 'dsh-mail-brandsub' }, t('note').slice(0, 0) || 'IMAP / SMTP'))
+          ),
+          h('span', { className: 'dsh-mail-spacer' }),
+          h('button', {
+            className: 'dsh-mail-btn dsh-mail-btn-primary',
+            onClick: () => navTo('compose'),
+            disabled: !activeId || view === 'compose',
+          }, h(Ico, { name: 'compose', size: 15 }), t('compose'))
         ),
 
-        view === 'inbox' && h('div', { className: 'dsh-mail-view', style: S.body },
-          h('div', { style: S.row },
-            accounts && accounts.length > 0
-              ? h('select', { style: S.select, value: activeId, onChange: e => setActiveId(e.target.value) }, accounts.map(a => h('option', { key: a.id, value: a.id }, a.name)))
-              : h('span', { style: S.hint }, t('noAccounts')),
-            h('span', { style: S.spacer }),
-            h('button', { className: 'dsh-mail-btn', onClick: loadMessages, disabled: !activeId || busy }, t('refresh')),
-            loadingMessages && messages.length > 0 && h('div', { className: 'dsh-mail-spinner', style: { width: 14, height: 14 } }),
-          ),
-          !activeId ? null : (loadingMessages && messages.length === 0
-            ? Loading()
-            : (messages.length === 0
-              ? h('div', { style: S.hint }, t('noMessages'))
-              : messages.map(m => h('div', { key: m.uid, className: 'dsh-mail-item', style: S.item, onClick: () => openMessage(m.uid) },
-                h('div', { style: S.subject }, m.subject || t('noSubject')),
-                h('div', { style: S.muted }, (m.from || '') + '  ·  ' + (m.date || '')),
-                h('div', { style: S.snippet }, m.snippet || '')
-              ))
-            ))
+        // Segmented navigation
+        h('div', { className: 'dsh-mail-tabs' },
+          tabs.map(tab => h('button', {
+            key: tab.key,
+            className: 'dsh-mail-tab' + (view === tab.key ? ' is-active' : ''),
+            onClick: () => navTo(tab.key),
+          },
+            h(Ico, { name: tab.icon, size: 16 }),
+            h('span', null, tab.label),
+            tab.badge > 0 ? h('span', { className: 'dsh-mail-badge' }, tab.badge) : null
+          ))
         ),
 
-        view === 'sent' && h('div', { className: 'dsh-mail-view', style: S.body },
-          h('div', { style: S.row },
-            h('button', { className: 'dsh-mail-btn', onClick: () => setView('inbox') }, '← ' + t('back')),
-            h('span', { style: S.spacer }),
-            h('span', { style: S.hint }, account ? account.username : ''),
-            h('button', { className: 'dsh-mail-btn', onClick: loadSent, disabled: !activeId || busy }, t('refresh')),
-            loadingSent && sent.length > 0 && h('div', { className: 'dsh-mail-spinner', style: { width: 14, height: 14 } }),
-          ),
-          loadingSent && sent.length === 0
-            ? Loading()
-            : (sent.length === 0
-              ? h('div', { style: S.hint }, t('noSent'))
-            : sent.map(m => h('div', { key: m.id, className: 'dsh-mail-item', style: S.item, onClick: () => setSentDetail(m) },
-              h('div', { style: S.subject }, m.subject || t('noSubject')),
-              h('div', { style: S.muted }, t('to') + ': ' + (m.to || '') + '  ·  ' + (m.date || '')),
-              h('div', { style: S.snippet }, m.body || '')
-            )))
+        flash && h('div', { className: 'dsh-mail-flash ' + (flash.kind === 'error' ? 'dsh-mail-flash-error' : 'dsh-mail-flash-success') },
+          h(Ico, { name: flash.kind === 'error' ? 'warning' : 'check', size: 15 }),
+          h('span', null, flash.text)
         ),
 
-        view === 'sent' && sentDetail && h('div', { className: 'dsh-mail-view', style: S.body },
-          h('button', { className: 'dsh-mail-btn', style: { alignSelf: 'flex-start' }, onClick: () => setSentDetail(null) }, '‹ ' + t('back')),
-          h('h3', { style: S.detailHead }, sentDetail.subject || t('sent')),
-          h('div', { style: Object.assign({}, S.muted, S.detailMeta) }, (sentDetail.to || '') + ' · ' + (sentDetail.date || '')),
-          h('div', { style: S.mailBody }, String(sentDetail.body || '')),
+        // Account switcher + contextual refresh, shown on data views
+        isList && view !== 'accounts' && h('div', { className: 'dsh-mail-accountbar' },
+          h(Ico, { name: 'user', size: 15 }),
+          accounts && accounts.length > 0
+            ? h('select', { className: 'dsh-mail-select', value: activeId, onChange: e => setActiveId(e.target.value) },
+              accounts.map(a => h('option', { key: a.id, value: a.id }, a.name + ' · ' + a.username)))
+            : h('span', { className: 'dsh-mail-hint' }, t('noAccounts')),
+          h('span', { className: 'dsh-mail-spacer' }),
+          h('button', { className: 'dsh-mail-btn dsh-mail-iconbtn', onClick: refreshCurrent, disabled: !activeId || busy, title: t('refresh') }, h(Ico, { name: 'refresh', size: 15 }))
         ),
-        view === 'contacts' && h('div', { className: 'dsh-mail-view', style: S.body },
-          h('div', { style: S.row },
-            h('button', { className: 'dsh-mail-btn', onClick: () => setView('inbox') }, '← ' + t('back')),
-          ),
-          h('div', { style: S.hint, marginBottom: 12 }, t('contactsHint')),
-          h('div', { style: S.card },
-            h('div', { style: S.row },
-              h('div', { style: S.field }, h('span', { style: S.label }, t('contactName')), h('input', { style: S.input, value: contactForm.name, onChange: e => setContactForm(Object.assign({}, contactForm, { name: e.target.value })) })),
-              h('div', { style: S.field }, h('span', { style: S.label }, t('contactEmail')), h('input', { style: S.input, value: contactForm.email, placeholder: 'friend@example.com', onChange: e => setContactForm(Object.assign({}, contactForm, { email: e.target.value })) }))
-            ),
-            h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: saveContact, disabled: busy || !contactForm.email }, t('saveContact'))
-          ),
-          loadingContacts && contacts.length === 0
-            ? Loading()
-            : (contacts.length === 0
-              ? h('div', { style: S.hint }, t('noContacts'))
-            : contacts.map(c => h('div', { key: c.email, style: S.item },
-              h('div', { style: S.row },
-                h('strong', null, c.name || c.email),
-                h('span', { style: S.muted }, ' ' + c.email)
+
+        /* ------------------------------- INBOX ------------------------------ */
+        view === 'inbox' && h('div', { className: 'dsh-mail-view' },
+          !activeId
+            ? h(Empty, { icon: 'user', title: t('accounts'), sub: t('noAccounts') })
+            : (loadingMessages && messages.length === 0)
+              ? h(Loading)
+              : (messages.length === 0)
+                ? h(Empty, { icon: 'inbox', title: t('inbox'), sub: t('noMessages') })
+                : h('div', { className: 'dsh-mail-list' }, messages.map(m =>
+                  h('div', {
+                    key: m.uid,
+                    className: 'dsh-mail-row' + (m.seen === false ? '' : ' dsh-mail-read'),
+                    onClick: () => openMessage(m.uid),
+                  },
+                    h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(m.from || m.subject) } }, avatarLetter(m.from || m.subject)),
+                    h('div', { className: 'dsh-mail-rowmain' },
+                      h('div', { className: 'dsh-mail-rowtop' },
+                        h('span', { className: 'dsh-mail-from' }, String(m.from || '').replace(/<.*>/, '').trim() || m.from || ''),
+                        h('span', { className: 'dsh-mail-time' }, fmtDate(m.date))
+                      ),
+                      h('div', { className: 'dsh-mail-subject' }, m.subject || t('noSubject')),
+                      h('div', { className: 'dsh-mail-preview' }, m.snippet || '')
+                    ),
+                    m.seen === false ? h('span', { className: 'dsh-mail-unread', title: t('inbox') }) : null
+                  )
+                ))
+        ),
+
+        /* -------------------------------- SENT ------------------------------ */
+        view === 'sent' && h('div', { className: 'dsh-mail-view' },
+          sentDetail
+            ? h('div', { className: 'dsh-mail-scroll' },
+              h('button', { className: 'dsh-mail-btn', onClick: () => setSentDetail(null) }, h(Ico, { name: 'back', size: 15 }), t('back')),
+              h('div', { className: 'dsh-mail-detailhead' },
+                h('h2', { className: 'dsh-mail-detailtitle' }, sentDetail.subject || t('noSubject')),
+                h('div', { className: 'dsh-mail-detailmeta' }, t('to') + ': ' + (sentDetail.to || '') + ' · ' + fmtDate(sentDetail.date))
               ),
-              h('div', { style: S.row },
-                h('button', { className: 'dsh-mail-btn', onClick: () => composeTo(c.email) }, t('selectContact')),
-                h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteContact(c.email), disabled: busy }, t('deleteContact'))
-              )
-            )))
+              h('div', { className: 'dsh-mail-mailbody', style: { whiteSpace: 'pre-wrap' } }, String(sentDetail.body || ''))
+            )
+            : h('div', { className: 'dsh-mail-view' },
+              loadingSent && sent.length === 0
+                ? h(Loading)
+                : (sent.length === 0)
+                  ? h(Empty, { icon: 'sent', title: t('sent'), sub: t('noSent') })
+                  : h('div', { className: 'dsh-mail-list' }, sent.map(m =>
+                    h('div', { key: m.id, className: 'dsh-mail-row dsh-mail-read', onClick: () => setSentDetail(m) },
+                      h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(m.to || m.subject) } }, avatarLetter(m.to || m.subject)),
+                      h('div', { className: 'dsh-mail-rowmain' },
+                        h('div', { className: 'dsh-mail-rowtop' },
+                          h('span', { className: 'dsh-mail-from' }, t('to') + ': ' + (m.to || '')),
+                          h('span', { className: 'dsh-mail-time' }, fmtDate(m.date))
+                        ),
+                        h('div', { className: 'dsh-mail-subject' }, m.subject || t('noSubject')),
+                        h('div', { className: 'dsh-mail-preview' }, m.body || '')
+                      )
+                    )
+                  ))
+            )
         ),
 
-        view === 'detail' && h('div', { style: Object.assign({}, S.body, { display: 'flex', flexDirection: 'column', alignItems: 'center' }) },
-          h('button', { className: 'dsh-mail-btn', style: { alignSelf: 'flex-start' }, onClick: () => setView('inbox') }, '← ' + t('back')),
-          detail && h('div', { style: S.detailWrap },
-            h('h3', { style: S.detailHead }, detail.subject || t('noSubject')),
-            h('div', { style: Object.assign({}, S.muted, S.detailMeta) }, (detail.from || '') + '  →  ' + (detail.to || '') + '  ·  ' + (detail.date || '')),
-            h('style', null, S.mailHtmlCss),
-            h('div', {
-              className: 'dsh-mail-html',
-              style: S.mailBody,
-              onClick: (e) => {
-                const a = e.target && e.target.closest && e.target.closest('a[href]');
-                if (!a) return;
-                const href = a.getAttribute('href');
-                if (!href) return;
-                e.preventDefault();
-                if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
-              },
-              dangerouslySetInnerHTML: { __html: detail.html || ('<div style="white-space:pre-wrap">' + escHtml(detail.body || '') + '</div>') },
-            })
+        /* ------------------------------ CONTACTS ---------------------------- */
+        view === 'contacts' && h('div', { className: 'dsh-mail-view' },
+          h('div', { className: 'dsh-mail-scroll' },
+            h('div', { className: 'dsh-mail-card' },
+              h('div', { className: 'dsh-mail-cardhead' }, h(Ico, { name: 'user', size: 16 }), t('addContact')),
+              h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, t('contactsHint')),
+              h('div', { className: 'dsh-mail-grid' },
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('contactName')),
+                  h('input', { className: 'dsh-mail-input', value: contactForm.name, placeholder: t('contactName'), onChange: e => setContactForm(Object.assign({}, contactForm, { name: e.target.value })) })
+                ),
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('contactEmail')),
+                  h('input', { className: 'dsh-mail-input', value: contactForm.email, placeholder: 'friend@example.com', onChange: e => setContactForm(Object.assign({}, contactForm, { email: e.target.value })) })
+                )
+              ),
+              h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: saveContact, disabled: busy || !contactForm.email }, h(Ico, { name: 'check', size: 15 }), t('saveContact'))
+            ),
+            loadingContacts && contacts.length === 0
+              ? h(Loading)
+              : (contacts.length === 0)
+                ? h(Empty, { icon: 'users', title: t('contacts'), sub: t('noContacts') })
+                : h('div', null, contacts.map(c =>
+                  h('div', { key: c.email, className: 'dsh-mail-card', style: { padding: '12px 14px' } },
+                    h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                      h('div', { className: 'dsh-mail-avatar', style: { width: 32, height: 32, fontSize: 13, background: avatarColor(c.email) } }, avatarLetter(c.name || c.email)),
+                      h('div', { style: { flex: 1, minWidth: 0 } },
+                        h('div', { style: { fontWeight: 600 } }, c.name || c.email),
+                        c.name ? h('div', { className: 'dsh-mail-hint' }, c.email) : null
+                      ),
+                      h('button', { className: 'dsh-mail-btn', onClick: () => composeTo(c.email) }, h(Ico, { name: 'compose', size: 14 }), t('selectContact')),
+                      h('button', { className: 'dsh-mail-btn dsh-mail-iconbtn dsh-mail-btn-danger', onClick: () => deleteContact(c.email), disabled: busy, title: t('deleteContact') }, h(Ico, { name: 'trash', size: 14 }))
+                    )
+                  )
+                ))
           )
         ),
 
-        view === 'compose' && h('div', { className: 'dsh-mail-view', style: S.body },
-          h('div', { style: S.row },
-            h('button', { className: 'dsh-mail-btn', onClick: () => setView('inbox') }, '← ' + t('back')),
-            h('span', { style: S.spacer }),
-            h('span', { style: S.hint }, account ? account.username : ''),
-            h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: sendMail, disabled: busy || !compose.to }, t('send'))
-          ),
-          h('div', { style: S.field, marginBottom: 10 }, h('span', { style: S.label }, t('to')), h('input', { style: S.input, value: compose.to, placeholder: 'friend@example.com', onChange: e => setCompose(Object.assign({}, compose, { to: e.target.value })) })),
-          h('div', { style: S.field, marginBottom: 10 }, h('span', { style: S.label }, t('subject')), h('input', { style: S.input, value: compose.subject, onChange: e => setCompose(Object.assign({}, compose, { subject: e.target.value })) })),
-          h('div', { style: S.field }, h('span', { style: S.label }, t('body')), h('textarea', { style: S.textarea, value: compose.body, onChange: e => setCompose(Object.assign({}, compose, { body: e.target.value })) }))
+        /* ------------------------------- ACCOUNTS --------------------------- */
+        view === 'accounts' && h('div', { className: 'dsh-mail-view' },
+          h('div', { className: 'dsh-mail-scroll' },
+            (accounts || []).map(a => h('div', { key: a.id, className: 'dsh-mail-card' },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
+                h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(a.username) } }, avatarLetter(a.name || a.username)),
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                  h('div', { style: { fontWeight: 650 } }, a.name),
+                  h('div', { className: 'dsh-mail-hint' }, a.username)
+                )
+              ),
+              h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, (a.imapHost || '') + ':' + a.imapPort + ' · ' + (a.smtpHost || '') + ':' + a.smtpPort),
+              h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+                h('button', { className: 'dsh-mail-btn', onClick: () => testAccount(a.id), disabled: busy }, h(Ico, { name: 'check', size: 14 }), t('test')),
+                h('button', { className: 'dsh-mail-btn', onClick: () => { setActiveId(a.id); navTo('inbox'); } }, h(Ico, { name: 'inbox', size: 14 }), t('inbox')),
+                h('button', { className: 'dsh-mail-btn dsh-mail-btn-danger', onClick: () => deleteAccount(a.id), disabled: busy }, h(Ico, { name: 'trash', size: 14 }), t('delete'))
+              )
+            )),
+            h('div', { className: 'dsh-mail-card' },
+              h('div', { className: 'dsh-mail-cardhead' }, h(Ico, { name: 'plus', size: 16 }), t('addAccount')),
+              h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, t('note')),
+              h('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 } },
+                Object.keys(PRESETS).map(k => h('button', {
+                  key: k, type: 'button', 'aria-pressed': form.preset === k,
+                  className: 'dsh-mail-pill' + (form.preset === k ? ' is-active' : ''),
+                  onClick: () => applyPreset(k),
+                }, t(k)))
+              ),
+              h('div', { className: 'dsh-mail-grid' },
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('name')),
+                  h('input', { className: 'dsh-mail-input', value: form.name, onChange: e => setForm(Object.assign({}, form, { name: e.target.value })) })
+                ),
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('username')),
+                  h('input', { className: 'dsh-mail-input', value: form.username, placeholder: 'me@qq.com', onChange: e => setForm(Object.assign({}, form, { username: e.target.value })) })
+                )
+              ),
+              h('div', { className: 'dsh-mail-field' },
+                h('span', { className: 'dsh-mail-label' }, t('authCode')),
+                h('input', { className: 'dsh-mail-input', type: 'password', value: form.authCode, onChange: e => setForm(Object.assign({}, form, { authCode: e.target.value })) })
+              ),
+              h('div', { className: 'dsh-mail-grid' },
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('imapHost')),
+                  h('input', { className: 'dsh-mail-input', value: form.imapHost, onChange: e => setForm(Object.assign({}, form, { imapHost: e.target.value })) })
+                ),
+                h('div', { className: 'dsh-mail-field', style: { flex: '0 0 96px', minWidth: 96 } },
+                  h('span', { className: 'dsh-mail-label' }, t('imapPort')),
+                  h('input', { className: 'dsh-mail-input', value: form.imapPort, onChange: e => setForm(Object.assign({}, form, { imapPort: e.target.value })) })
+                )
+              ),
+              h('div', { className: 'dsh-mail-grid' },
+                h('div', { className: 'dsh-mail-field' },
+                  h('span', { className: 'dsh-mail-label' }, t('smtpHost')),
+                  h('input', { className: 'dsh-mail-input', value: form.smtpHost, onChange: e => setForm(Object.assign({}, form, { smtpHost: e.target.value })) })
+                ),
+                h('div', { className: 'dsh-mail-field', style: { flex: '0 0 96px', minWidth: 96 } },
+                  h('span', { className: 'dsh-mail-label' }, t('smtpPort')),
+                  h('input', { className: 'dsh-mail-input', value: form.smtpPort, onChange: e => setForm(Object.assign({}, form, { smtpPort: e.target.value })) })
+                )
+              ),
+              h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: saveAccount, disabled: busy || !form.username || !form.authCode }, h(Ico, { name: 'check', size: 15 }), t('save'))
+            )
+          )
+        ),
+
+        /* ------------------------------- DETAIL ----------------------------- */
+        view === 'detail' && h('div', { className: 'dsh-mail-view' },
+          h('div', { className: 'dsh-mail-scroll' },
+            h('button', { className: 'dsh-mail-btn', onClick: () => setView('inbox') }, h(Ico, { name: 'back', size: 15 }), t('back')),
+            detail && h('div', null,
+              h('div', { className: 'dsh-mail-detailhead' },
+                h('h2', { className: 'dsh-mail-detailtitle' }, detail.subject || t('noSubject')),
+                h('div', { className: 'dsh-mail-detailfrom' },
+                  h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(detail.from || detail.subject) } }, avatarLetter(detail.from || detail.subject)),
+                  h('div', { style: { minWidth: 0 } },
+                    h('div', { style: { fontWeight: 600 } }, String(detail.from || '').replace(/<.*>/, '').trim() || detail.from || ''),
+                    h('div', { className: 'dsh-mail-detailmeta' }, t('to') + ': ' + (detail.to || '') + ' · ' + fmtDate(detail.date))
+                  )
+                )
+              ),
+              h('div', {
+                className: 'dsh-mail-mailbody',
+                onClick: (e) => {
+                  const a = e.target && e.target.closest && e.target.closest('a[href]');
+                  if (!a) return;
+                  const href = a.getAttribute('href');
+                  if (!href) return;
+                  e.preventDefault();
+                  if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
+                },
+                dangerouslySetInnerHTML: { __html: detail.html || ('<div style="white-space:pre-wrap">' + escHtml(detail.body || '') + '</div>') },
+              })
+            )
+          )
+        ),
+
+        /* ------------------------------- COMPOSE ---------------------------- */
+        view === 'compose' && h('div', { className: 'dsh-mail-view' },
+          h('div', { className: 'dsh-mail-scroll' },
+            h('div', { className: 'dsh-mail-card' },
+              h('div', { className: 'dsh-mail-cardhead' },
+                h(Ico, { name: 'compose', size: 16 }), t('compose'),
+                h('span', { className: 'dsh-mail-spacer' }),
+                h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: sendMail, disabled: busy || !compose.to }, h(Ico, { name: 'sent', size: 15 }), t('send'))
+              ),
+              h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, account ? account.username : ''),
+              h('div', { className: 'dsh-mail-field' },
+                h('span', { className: 'dsh-mail-label' }, t('to')),
+                h('input', { className: 'dsh-mail-input', value: compose.to, placeholder: 'friend@example.com', onChange: e => setCompose(Object.assign({}, compose, { to: e.target.value })) })
+              ),
+              h('div', { className: 'dsh-mail-field' },
+                h('span', { className: 'dsh-mail-label' }, t('subject')),
+                h('input', { className: 'dsh-mail-input', value: compose.subject, onChange: e => setCompose(Object.assign({}, compose, { subject: e.target.value })) })
+              ),
+              h('div', { className: 'dsh-mail-field' },
+                h('span', { className: 'dsh-mail-label' }, t('body')),
+                h('textarea', { className: 'dsh-mail-textarea', value: compose.body, onChange: e => setCompose(Object.assign({}, compose, { body: e.target.value })) })
+              )
+            )
+          )
         )
       );
     }
@@ -797,7 +971,6 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState(stored);
       const [saving, setSaving] = useState(false);
       const [failed, setFailed] = useState(false);
-      // Follow external changes to the host value (e.g. another editor).
       useEffect(() => { setDraft(stored); }, [stored]);
       const dirty = draft !== stored;
       const save = async () => {
@@ -806,7 +979,6 @@ window.__ModuleLoader__.load({
         setFailed(false);
         let landed = false;
         try {
-          // form.set fences the write with the latest known revision.
           landed = await form.set('agentMailAccess', draft);
         } catch { landed = false; }
         setSaving(false);
@@ -852,8 +1024,6 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-mail: dictionaries');
-        // A top-level "邮件" entry in the main Settings panel, alongside
-        // 通用 / 模型 / 插件 / 账号. Shown only while our Config is served.
         const configForm = ctx.configForms.get(NS);
         ctx.effect(() => ctx.configForms.whileServed([NS], () =>
           ctx.slots.inject('settings.section', () => ctx.slots.register({
