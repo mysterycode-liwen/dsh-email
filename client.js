@@ -38,6 +38,10 @@ window.__ModuleLoader__.load({
       const known = Object.prototype.hasOwnProperty.call(map, info.code);
       const head = known ? map[info.code] : t('errGeneric');
       const raw = String(info.error || '').trim();
+      // "unknown op" means the Host half predates this Client half: the plugin
+      // was updated on disk but DeepSeek Harness was never restarted, so the
+      // running Host has no case for the op the UI just sent.
+      if (/unknown op/i.test(raw)) return t('errOutdatedHost');
       const detail = (!known && raw && raw !== head) ? '\n' + t('errDetail') + raw : '';
       return stage + head + detail;
     }
@@ -103,6 +107,7 @@ window.__ModuleLoader__.load({
       errNotFound: '未找到这封邮件，它可能已被删除。',
       errGeneric: '操作失败，请稍后重试。',
       errDetail: '服务器返回：',
+      errOutdatedHost: '插件已更新，但 DeepSeek Harness 仍在运行旧版本。请完全退出并重新启动 DeepSeek Harness（仅刷新页面不够）。',
       sent: '发件箱',
       contacts: '联系人',
       noSent: '还没有已发送的邮件。',
@@ -241,6 +246,7 @@ window.__ModuleLoader__.load({
       errNotFound: 'This message was not found — it may have been deleted.',
       errGeneric: 'The operation failed. Please try again later.',
       errDetail: 'Server said: ',
+      errOutdatedHost: 'The plugin was updated but DeepSeek Harness is still running the old version. Fully quit and restart DeepSeek Harness (refreshing the page is not enough).',
       sent: 'Sent',
       contacts: 'Contacts',
       noSent: 'No sent messages yet.',
