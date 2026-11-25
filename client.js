@@ -60,6 +60,9 @@ window.__ModuleLoader__.load({
       test: '测试连接',
       delete: '删除',
       refresh: '刷新',
+      refreshing: '刷新中…',
+      refreshed: '已刷新',
+      refreshFailed: '刷新失败',
       inbox: '收件箱',
       compose: '写邮件',
       to: '收件人',
@@ -182,6 +185,9 @@ window.__ModuleLoader__.load({
       test: 'Test connection',
       delete: 'Delete',
       refresh: 'Refresh',
+      refreshing: 'Refreshing…',
+      refreshed: 'Refreshed',
+      refreshFailed: 'Refresh failed',
       inbox: 'Inbox',
       compose: 'Compose',
       to: 'To',
@@ -317,6 +323,9 @@ window.__ModuleLoader__.load({
       '.dsh-mail-btn-danger { color:var(--dsw-alias-state-error-primary); border-color:var(--dsw-alias-state-error-primary); background:transparent; }',
       '.dsh-mail-btn-danger:hover:not(:disabled) { filter:none; background:var(--dsw-alias-state-error-primary); color:#fff; }',
       '.dsh-mail-iconbtn { width:30px; height:30px; padding:0; border-radius:8px; }',
+      '.dsh-mail-iconbtn .dsh-mail-spinicon { animation:dsh-mail-spin .8s linear infinite; }',
+      '.dsh-mail-refresh-ok { color:var(--dsw-alias-state-success-primary); }',
+      '.dsh-mail-refresh-err { color:var(--dsw-alias-state-error-primary); }',
 
       /* segmented navigation */
       '.dsh-mail-tabs { display:flex; align-items:center; gap:2px; padding:0 12px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); overflow-x:auto; }',
@@ -905,6 +914,8 @@ window.__ModuleLoader__.load({
       const [loadingMessages, setLoadingMessages] = useState(false);
       const [loadingSent, setLoadingSent] = useState(false);
       const [loadingContacts, setLoadingContacts] = useState(false);
+      const [refreshState, setRefreshState] = useState('idle'); // idle | loading | ok | error
+      const refreshTimerRef = useRef(null);
       const [flash, setFlash] = useState(null);
       const [form, setForm] = usePersistent('form', { preset: 'qq', name: '', username: '', authCode: '', imapHost: PRESETS.qq.imapHost, imapPort: 993, smtpHost: PRESETS.qq.smtpHost, smtpPort: 465 });
       const [compose, setCompose] = usePersistent('compose', { to: '', subject: '', body: '' });
@@ -918,6 +929,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         if (!PERSIST.accounts) refreshAccounts();
+        return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
       }, []);
 
       function notify(kind, text) {
@@ -954,7 +966,7 @@ window.__ModuleLoader__.load({
       }
 
       async function loadMessages(showProgress) {
-        if (!activeId) return;
+        if (!activeId) return false;
         // Cache-first: if we already have this account's list, keep it visible
         // while the fresh list loads in the background (no blank/Loading flash).
         const cached = cache[activeId];
@@ -964,22 +976,26 @@ window.__ModuleLoader__.load({
           const fresh = data.messages || [];
           setMessages(fresh);
           setCache(prev => Object.assign({}, prev, { [activeId]: fresh }));
+          return true;
         } catch (e) {
           reportError(e);
+          return false;
         } finally {
           setLoadingMessages(false);
         }
       }
 
       async function loadSent() {
-        if (!activeId) return;
+        if (!activeId) return false;
         setBusy(true);
         setLoadingSent(true);
         try {
           const data = await rpc('sentMessages', { id: activeId });
           setSent(data.sent || []);
+          return true;
         } catch (e) {
           reportError(e);
+          return false;
         } finally {
           setLoadingSent(false);
           setBusy(false);
@@ -987,14 +1003,16 @@ window.__ModuleLoader__.load({
       }
 
       async function loadContacts() {
-        if (!activeId) return;
+        if (!activeId) return false;
         setBusy(true);
         setLoadingContacts(true);
         try {
           const data = await rpc('listContacts', { id: activeId });
           setContacts(data.contacts || []);
+          return true;
         } catch (e) {
           reportError(e);
+          return false;
         } finally {
           setLoadingContacts(false);
           setBusy(false);
@@ -1158,10 +1176,26 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function refreshCurrent() {
-        if (view === 'sent') loadSent();
-        else if (view === 'contacts') loadContacts();
-        else loadMessages();
+      async function refreshCurrent() {
+        if (!activeId || refreshState === 'loading') return;
+        setRefreshState('loading');
+        // Clear any previous terminal state timer so a new click starts clean.
+        if (refreshTimerRef.current) { clearTimeout(refreshTimerRef.current); refreshTimerRef.current = null; }
+        let ok = false;
+        try {
+          if (view === 'sent') ok = await loadSent();
+          else if (view === 'contacts') ok = await loadContacts();
+          else ok = await loadMessages();
+        } catch (e) {
+          reportError(e);
+          ok = false;
+        }
+        // Tie the spinner result to the actual outcome, then revert to idle.
+        setRefreshState(ok ? 'ok' : 'error');
+        refreshTimerRef.current = setTimeout(() => {
+          setRefreshState('idle');
+          refreshTimerRef.current = null;
+        }, 1400);
       }
 
       function composeTo(email) {
@@ -1239,7 +1273,14 @@ window.__ModuleLoader__.load({
               accounts.map(a => h('option', { key: a.id, value: a.id }, a.name + ' · ' + a.username)))
             : h('span', { className: 'dsh-mail-hint' }, t('noAccounts')),
           h('span', { className: 'dsh-mail-spacer' }),
-          h('button', { className: 'dsh-mail-btn dsh-mail-iconbtn', onClick: refreshCurrent, disabled: !activeId || busy, title: t('refresh') }, h(Ico, { name: 'refresh', size: 15 }))
+          h('button', {
+            className: 'dsh-mail-btn dsh-mail-iconbtn' + (refreshState === 'ok' ? ' dsh-mail-refresh-ok' : refreshState === 'error' ? ' dsh-mail-refresh-err' : ''),
+            onClick: refreshCurrent,
+            disabled: !activeId || busy || refreshState === 'loading',
+            title: refreshState === 'loading' ? t('refreshing') : refreshState === 'ok' ? t('refreshed') : refreshState === 'error' ? t('refreshFailed') : t('refresh'),
+            'aria-label': refreshState === 'loading' ? t('refreshing') : t('refresh'),
+          }, h('span', { className: refreshState === 'loading' ? 'dsh-mail-spinicon' : '', style: { display: 'inline-flex' } },
+            h(Ico, { name: refreshState === 'ok' ? 'check' : refreshState === 'error' ? 'warning' : 'refresh', size: 15 })))
         ),
 
         /* ------------------------------- INBOX ------------------------------ */
