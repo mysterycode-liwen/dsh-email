@@ -77,11 +77,12 @@ async function readSettings(ctx) {
   const rawInterval = Number(data.notifyInterval);
   return {
     agentMailAccess: data.agentMailAccess === true,
-    // New-mail notifications are on by default; the browser permission is
-    // still requested on the Client side before any toast can appear.
+    // New-mail alerts are on by default. Delivery is via the desktop pet
+    // (default), a browser system notification, or both.
     notifyEnabled: data.notifyEnabled !== false,
     // Clamp to 15s..3600s; 60s default. Keeps IMAP polling reasonable.
     notifyInterval: Number.isFinite(rawInterval) ? Math.min(3600, Math.max(15, Math.round(rawInterval))) : 60,
+    notifyMode: ['pet', 'system', 'both'].includes(data.notifyMode) ? data.notifyMode : 'pet',
   };
 }
 
@@ -92,6 +93,7 @@ async function writeSettings(ctx, value) {
     agentMailAccess: input.agentMailAccess === true,
     notifyEnabled: input.notifyEnabled !== false,
     notifyInterval: Number.isFinite(rawInterval) ? Math.min(3600, Math.max(15, Math.round(rawInterval))) : 60,
+    notifyMode: ['pet', 'system', 'both'].includes(input.notifyMode) ? input.notifyMode : 'pet',
   };
   await writeData(ctx, SETTINGS_KEY, next);
   return next;

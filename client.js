@@ -118,8 +118,8 @@ window.__ModuleLoader__.load({
       settingsSaving: '保存中…',
       settingsSaveFailed: '设置未保存成功，请重试。',
       notifySectionTitle: '新邮件通知',
-      notifySectionHint: '后台定时检查邮箱，收到新邮件时由 DeepSeek Harness 弹出系统通知。',
-      notifyEnabledLabel: '启用新邮件通知（需浏览器通知权限）',
+      notifySectionHint: '后台定时检查邮箱，收到新邮件时让桌宠气泡播报；若浏览器已授权，也会同时弹出系统通知。',
+      notifyEnabledLabel: '启用新邮件提醒（桌宠播报）',
       notifyIntervalLabel: '检查间隔（秒）',
       notifyPermission: '申请通知权限',
       notifyPermissionGranted: '通知权限已开启',
@@ -131,8 +131,14 @@ window.__ModuleLoader__.load({
       notifyTestFailed: '测试通知发送失败',
       notifyTitle: '新邮件',
       notifyBody: '封未读新邮件',
-      notifyTestTitle: '邮件通知测试',
-      notifyTestBody: '如果你看到这条通知，说明新邮件提醒已正常工作。',
+      notifyTestTitle: '邮件播报测试',
+      notifyTestBody: '如果你看到桌宠说话，说明新邮件播报已正常工作。',
+      notifyPetOk: '已让桌宠播报（请留意桌面桌宠）',
+      notifyPetNone: '未发现可用的桌宠，仅发送了系统通知',
+      notifyMode: '通知方式',
+      notifyModePet: '桌宠播报',
+      notifyModeSystem: '系统通知（需浏览器权限）',
+      notifyModeBoth: '桌宠播报 + 系统通知',
     };
     const en = {
       label: 'Mail',
@@ -210,8 +216,8 @@ window.__ModuleLoader__.load({
       settingsSaving: 'Saving…',
       settingsSaveFailed: 'The deployment did not accept this value; please try again.',
       notifySectionTitle: 'New mail notifications',
-      notifySectionHint: 'Check your mailbox in the background and let DeepSeek Harness show a system notification when new mail arrives.',
-      notifyEnabledLabel: 'Enable new mail notifications (needs browser permission)',
+      notifySectionHint: 'Check your mailbox in the background and have your desktop pet announce new mail in a speech bubble; a system notification is also shown when browser permission is granted.',
+      notifyEnabledLabel: 'Enable new mail alerts (pet announcement)',
       notifyIntervalLabel: 'Check interval (seconds)',
       notifyPermission: 'Grant notification permission',
       notifyPermissionGranted: 'Notification permission is granted',
@@ -223,8 +229,14 @@ window.__ModuleLoader__.load({
       notifyTestFailed: 'Failed to send test notification',
       notifyTitle: 'New mail',
       notifyBody: 'new unread message(s)',
-      notifyTestTitle: 'Mail notification test',
-      notifyTestBody: 'If you can see this, new mail notifications are working.',
+      notifyTestTitle: 'Mail announcement test',
+      notifyTestBody: 'If your desktop pet speaks, new mail announcements are working.',
+      notifyPetOk: 'Asked your desktop pet to announce it (watch the desktop)',
+      notifyPetNone: 'No desktop pet available; only a system notification was sent',
+      notifyMode: 'Notification mode',
+      notifyModePet: 'Pet announcement',
+      notifyModeSystem: 'System notification (needs browser permission)',
+      notifyModeBoth: 'Pet announcement + system notification',
     };
 
     // ---------------------------------------------------------------------
@@ -392,11 +404,54 @@ window.__ModuleLoader__.load({
     const NOTIFY = {
       ctx: null,
       disposeTimer: null,
-      settings: { notifyEnabled: true, notifyInterval: 60 },
+      settings: { notifyEnabled: true, notifyInterval: 60, notifyMode: 'pet' },
       baselines: {},   // accountId -> array of last-seen uids
       busy: false,
       lastError: null, // last notification failure reason, surfaced in settings
+      petId: null,     // cached desktop-pet instance id
     };
+
+    const PET_ROUTE = '/dsh-pet-7340';
+
+    // The desktop pet exposes a same-origin prefix route on the DSH web server.
+    // /state lists every pet instance under `pets`; pick the first one. Cached
+    // because it rarely changes, but refreshed on a miss so a late pet works.
+    async function resolvePetId() {
+      if (NOTIFY.petId) return NOTIFY.petId;
+      try {
+        const r = await fetch(PET_ROUTE + '/state', { cache: 'no-store' });
+        const data = await r.json();
+        const pets = data && data.pets && typeof data.pets === 'object' ? data.pets : null;
+        if (pets) {
+          const ids = Object.keys(pets);
+          if (ids.length > 0) { NOTIFY.petId = ids[0]; return NOTIFY.petId; }
+        }
+      } catch { /* pet not installed or route unavailable */ }
+      return null;
+    }
+
+    // Feed a speech bubble to the desktop pet. `speak:true` asks the pet to
+    // voice the line; surface=web works for the common web-displayed pet and
+    // we fall back to `any` (bubble only) if the surface gate rejects us.
+    async function announceViaPet(text) {
+      const petId = await resolvePetId();
+      if (!petId) return false;
+      const post = async (surface) => {
+        const body = { text, speak: true, anim: false, duration: 8000 };
+        const r = await fetch(PET_ROUTE + '/broadcast?pet=' + encodeURIComponent(petId) + '&surface=' + surface, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        });
+        let ok = false;
+        try { const d = await r.json(); ok = !!(d && d.ok); } catch { ok = r.ok; }
+        return ok;
+      };
+      try {
+        if (await post('web')) return true;
+        if (await post('any')) return true;
+      } catch { /* fall through */ }
+      NOTIFY.petId = null; // force re-resolve next time (pet may have changed)
+      return false;
+    }
 
     function notifyPermission() {
       return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
@@ -413,7 +468,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function showMailToast(title, body, opts) {
+    function showSystemToast(title, body, opts) {
       const perm = notifyPermission();
       if (perm !== 'granted') {
         NOTIFY.lastError = perm === 'unsupported' ? 'unsupported' : 'permission:' + perm;
@@ -435,12 +490,29 @@ window.__ModuleLoader__.load({
             try { NOTIFY.ctx.get('layout').selectPanel('dsh-mail'); } catch { /* panel service unavailable */ }
           }
         };
-        NOTIFY.lastError = null;
         return n;
       } catch (e) {
         NOTIFY.lastError = 'construct: ' + (e && e.message ? e.message : String(e));
         return null;
       }
+    }
+
+    // Deliver a new-mail alert according to the configured mode.
+    // Returns a short status string used by the test button for inline feedback.
+    async function deliverAlert(title, body, opts) {
+      const mode = NOTIFY.settings.notifyMode || 'pet';
+      let petOk = false;
+      let sysOk = false;
+      if (mode === 'pet' || mode === 'both') {
+        petOk = await announceViaPet(body);
+      }
+      if (mode === 'system' || mode === 'both' || (mode === 'pet' && !petOk)) {
+        // In pet mode, fall back to a system toast when the pet route is absent.
+        const n = showSystemToast(title, body, opts);
+        sysOk = !!n;
+      }
+      NOTIFY.lastError = (petOk || sysOk) ? null : 'no-channel';
+      return { petOk, sysOk };
     }
 
     // Prefer the Cordis timer service; fall back to the browser timer so the
@@ -467,7 +539,11 @@ window.__ModuleLoader__.load({
     function startPoller() {
       stopPoller();
       if (!NOTIFY.ctx || !NOTIFY.settings.notifyEnabled) return;
-      if (notifyPermission() !== 'granted') return; // nothing can be shown yet
+      // A desktop-pet announcement needs no browser permission. Only the
+      // pure "system notification" mode requires it; in that case start the
+      // poller once permission is granted via the settings button.
+      const mode = NOTIFY.settings.notifyMode || 'pet';
+      if (mode === 'system' && notifyPermission() !== 'granted') return;
       const delayMs = Math.max(15, NOTIFY.settings.notifyInterval || 60) * 1000;
       NOTIFY.disposeTimer = armPoller(() => { void pollNewMail(); }, delayMs);
       void pollNewMail(); // seed baselines on start without spamming old mail
@@ -477,7 +553,8 @@ window.__ModuleLoader__.load({
       if (NOTIFY.busy) return;
       NOTIFY.busy = true;
       try {
-        if (notifyPermission() !== 'granted') return;
+        const mode = NOTIFY.settings.notifyMode || 'pet';
+        if (mode === 'system' && notifyPermission() !== 'granted') return;
         const ar = await fetch(API, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ op: 'listAccounts' }),
@@ -501,7 +578,7 @@ window.__ModuleLoader__.load({
             if (fresh.length > 0) {
               const latest = fresh[0] || {};
               const who = acc.name ? acc.name + '：' : '';
-              showMailToast(
+              void deliverAlert(
                 t('notifyTitle'),
                 who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody'),
                 { tag: 'dsh-mail-new' }
@@ -529,6 +606,7 @@ window.__ModuleLoader__.load({
           NOTIFY.settings = {
             notifyEnabled: data.settings.notifyEnabled !== false,
             notifyInterval: Number(data.settings.notifyInterval) || 60,
+            notifyMode: data.settings.notifyMode || 'pet',
           };
         }
       } catch { /* keep current settings */ }
@@ -1177,8 +1255,8 @@ window.__ModuleLoader__.load({
     // available on this DSH build.
     function MailSettingsSection(props) {
       const tr = props && props.t ? props.t : t;
-      const [draft, setDraft] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60 });
-      const [stored, setStored] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60 });
+      const [draft, setDraft] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60, notifyMode: 'pet' });
+      const [stored, setStored] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60, notifyMode: 'pet' });
       const [saving, setSaving] = useState(false);
       const [loaded, setLoaded] = useState(false);
       const [failed, setFailed] = useState(false);
@@ -1202,6 +1280,7 @@ window.__ModuleLoader__.load({
               agentMailAccess: s.agentMailAccess === true,
               notifyEnabled: s.notifyEnabled !== false,
               notifyInterval: Number(s.notifyInterval) || 60,
+              notifyMode: s.notifyMode || 'pet',
             };
             setStored(next);
             setDraft(next);
@@ -1225,7 +1304,11 @@ window.__ModuleLoader__.load({
           if (!r.ok || !data || data.ok === false) throw new Error('save failed');
           const applied = data.settings || draft;
           setStored(applied);
-          NOTIFY.settings = { notifyEnabled: applied.notifyEnabled !== false, notifyInterval: Number(applied.notifyInterval) || 60 };
+          NOTIFY.settings = {
+            notifyEnabled: applied.notifyEnabled !== false,
+            notifyInterval: Number(applied.notifyInterval) || 60,
+            notifyMode: applied.notifyMode || 'pet',
+          };
           startPoller();
         } catch { setFailed(true); }
         setSaving(false);
@@ -1241,22 +1324,24 @@ window.__ModuleLoader__.load({
         return result;
       };
 
-      // Always works from a user gesture: if permission has not been granted
-      // yet, request it first (browser shells suppress requests made outside
-      // a click), then fire the toast and report the real outcome inline.
+      // Fired from a user gesture. Pet announcements need no browser
+      // permission; system-notification mode asks for it in-gesture first.
       const sendTest = async () => {
         if (asking) return;
-        let p = notifyPermission();
-        if (p !== 'granted') {
-          p = await requestPerm();
-          if (p !== 'granted') {
+        const mode = draft.notifyMode || NOTIFY.settings.notifyMode || 'pet';
+        if ((mode === 'system' || mode === 'both') && notifyPermission() !== 'granted') {
+          const p = await requestPerm();
+          if (p !== 'granted' && mode === 'system') {
             setTested(false);
             setTestMsg(p === 'denied' ? tr('notifyPermissionDenied') : (tr('notifyTestFailed') + ' (' + p + ')'));
             return;
           }
         }
-        const n = showMailToast(tr('notifyTestTitle'), tr('notifyTestBody'));
-        if (n) {
+        const result = await deliverAlert(tr('notifyTestTitle'), tr('notifyTestBody'));
+        if (result.petOk) {
+          setTested(true);
+          setTestMsg(tr('notifyPetOk'));
+        } else if (result.sysOk) {
           setTested(true);
           setTestMsg(tr('notifyTestSent'));
         } else {
@@ -1313,6 +1398,20 @@ window.__ModuleLoader__.load({
             style: numInput,
           })
         ),
+        h('label', { htmlFor: 'settings-dsh-mail-mode', style: { ...field, marginTop: 10 } },
+          h('span', null, tr('notifyMode')),
+          h('select', {
+            id: 'settings-dsh-mail-mode',
+            value: draft.notifyMode || 'pet',
+            disabled: saving || !loaded,
+            onChange: (e) => setDraft({ ...draft, notifyMode: (e && e.target && e.target.value) || 'pet' }),
+            style: numInput,
+          },
+            h('option', { value: 'pet' }, tr('notifyModePet')),
+            h('option', { value: 'system' }, tr('notifyModeSystem')),
+            h('option', { value: 'both' }, tr('notifyModeBoth'))
+          )
+        ),
 
         // Permission row.
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 } },
@@ -1332,13 +1431,13 @@ window.__ModuleLoader__.load({
               : perm === 'unsupported' ? tr('notifyPermissionUnsupported') : ''
           ),
           h('button', {
-            type: 'button', disabled: asking || perm === 'unsupported',
+            type: 'button', disabled: asking,
             onClick: () => { void sendTest(); },
             style: {
-              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
-              background: 'transparent', color: 'var(--dsw-alias-label-primary)',
-              fontSize: 13, cursor: asking || perm === 'unsupported' ? 'default' : 'pointer',
-              opacity: asking || perm === 'unsupported' ? 0.5 : 1,
+              padding: '6px 16px', borderRadius: 6, border: 'none',
+              background: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-bg-base)',
+              fontSize: 13, cursor: asking ? 'default' : 'pointer',
+              opacity: asking ? 0.5 : 1,
             },
           }, tr('notifyTest'))
         ),
