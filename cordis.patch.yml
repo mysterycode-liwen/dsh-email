@@ -1,3 +1,8 @@
+# dsh-mail bundle patch: installs the mail plugin row.
+# agentMailAccess defaults to false; the row is replaced (not deep-merged) when
+# edited here, and the browser Settings page can toggle the volatile field live.
 - insert:
     - id: dsh-mail
       name: '@mysterycode-liwen/dsh-mail'
+      config:
+        agentMailAccess: false

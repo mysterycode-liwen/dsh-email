@@ -14,6 +14,7 @@ A sidebar plugin for DeepSeek Harness that sends and receives mail from QQ / 163
 - [安装](#安装--install)
 - [快速上手](#快速上手--quick-start)
 - [功能](#功能--features)
+- [AI 助手查询邮箱（需开启）](#ai-助手查询邮箱需开启--ai-assistant-mail-query)
 - [支持的邮箱与服务器](#支持的邮箱与服务器--server-presets)
 - [工作原理](#工作原理--how-it-works)
 - [安全说明](#安全说明--security-notice)
@@ -64,6 +65,14 @@ dsh plugin --profile desktop add link:E:/DeepSeek/dsh-email
 - 写信：纯文本 / HTML 邮件正文通过 SMTP 发送（UTF-8）。
 - 连接测试：一键验证 IMAP 选定 INBOX + SMTP 登录。
 - 本地化：中文 / 英文界面，跟随 DSH 语言设置。
+
+## AI 助手查询邮箱（需开启）/ AI assistant mail query
+
+插件提供只读工具 `mail_query`，让 DeepSeek Harness 的 AI 助手方便查询邮箱内容（列出账号 / 列出邮件 / 读某封邮件 / 最近已发送）。出于隐私，**默认关闭**：必须先在「设置 → 插件 → dsh-mail」中打开「允许 AI 助手查询邮箱内容」开关，助手才能拿到邮件；关闭时工具直接返回“未开启”，不会访问邮箱。
+
+该工具只读取邮件，**不能发信、删信或修改任何数据**，也**不会返回授权码 / 密码等凭据**。开关实时生效，关闭后立即失效，无需重启插件。
+
+The read-only `mail_query` tool lets the DSH AI assistant query mail (list accounts / messages / read a message / recent sent). For privacy it is **off by default**: enable "Allow the AI assistant to query mailbox content" in Settings → Plugins → dsh-mail before the assistant can read mail; when off the tool returns "disabled" and never touches the mailbox. It cannot send, delete, or modify mail, and never returns credentials. The switch takes effect immediately.
 
 ## 支持的邮箱与服务器 / Server presets
 

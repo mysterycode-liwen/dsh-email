@@ -29,6 +29,8 @@
   },
   "exports": {
     ".": "./index.js",
+    "./config": "./config.js",
+    "./tools": "./tools.js",
     "./client": "./client.js",
     "./bridge.py": "./bridge.py",
     "./locale/*.json": "./locale/*.json",
@@ -36,6 +38,8 @@
   },
   "files": [
     "index.js",
+    "config.js",
+    "tools.js",
     "client.js",
     "bridge.py",
     "cordis.patch.yml",
@@ -46,11 +50,17 @@
     "LICENSE"
   ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": []
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   },
   "scripts": {

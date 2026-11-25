@@ -6,7 +6,11 @@ import { existsSync } from 'node:fs';
 const execFileAsync = promisify(execFile);
 const BRIDGE_PATH = fileURLToPath(new URL('./bridge.py', import.meta.url));
 
-export const inject = ['connection', 'credentials'];
+export const inject = ['connection', 'credentials', 'tools'];
+
+export { Config } from './config.js';
+import { Config } from './config.js';
+import { mailQueryTool } from './tools.js';
 
 const API = '/api/dsh-mail';
 
@@ -303,11 +307,16 @@ async function handleRequest(ctx, request) {
   }
 }
 
-export function apply(ctx) {
+export function apply(ctx, config) {
   ctx.effect(() => ctx.connection.fetch.register({
     path: API,
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: (request) => handleRequest(ctx, request),
   }), 'dsh-mail: fetch route');
+
+  // Read-only mailbox tool for the AI assistant. The tool itself checks the
+  // `agentMailAccess` setting on every call, so turning the switch off revokes
+  // access immediately without reloading the plugin.
+  ctx.effect(() => ctx.tools.register(mailQueryTool(ctx, config, handleRequest)), 'dsh-mail: mail_query tool');
 }

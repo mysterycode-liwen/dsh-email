@@ -4,6 +4,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
     const { useState, useEffect } = React;
+    const { SettingsForm, Checkbox } = require('@deepseek-ai/dsh-client-ui-primitives');
 
     const NS = 'dsh-mail';
     const API = '/api/dsh-mail';
@@ -110,6 +111,18 @@ window.__ModuleLoader__.load({
       saved: '已保存。',
       selectContact: '用此地址写邮件',
       attached: '附件',
+      // AI assistant mail access settings card
+      settingsTitle: '邮件插件设置',
+      settingsDescription: '配置 AI 助手是否可以读取你的邮箱。',
+      agentMailAccessLabel: '允许 AI 助手查询邮箱',
+      agentMailAccessHint: '开启后，AI 助手可以列出账号、读取邮件列表与内容、查看发件箱；不会暴露密码或授权码，也不能发送或删除邮件。默认关闭。',
+      agentMailAccessOn: '已开启：AI 助手可以读取邮箱。',
+      agentMailAccessOff: '已关闭：AI 助手无法读取邮箱。',
+      settingsUnavailable: '本页没有可编辑的配置表单；请在 profile 配置中设置 agentMailAccess。',
+      settingsReadOnly: '本部署的设置为只读。',
+      settingsSave: '保存',
+      settingsSaving: '保存中…',
+      settingsSaveFailed: '设置未保存成功，请重试。',
     };
     const en = {
       label: 'Mail',
@@ -176,6 +189,18 @@ window.__ModuleLoader__.load({
       saved: 'Saved.',
       selectContact: 'Compose to this address',
       attached: 'Attachments',
+      // AI assistant mail access settings card
+      settingsTitle: 'Mail settings',
+      settingsDescription: 'Control whether the AI assistant may read your mailbox.',
+      agentMailAccessLabel: 'Allow AI assistant to query mail',
+      agentMailAccessHint: 'When on, the AI assistant can list accounts, read message lists and bodies, and view sent mail. Passwords and app codes are never exposed, and it cannot send or delete mail. Off by default.',
+      agentMailAccessOn: 'On: the AI assistant can read your mailbox.',
+      agentMailAccessOff: 'Off: the AI assistant cannot read your mailbox.',
+      settingsUnavailable: 'This page has no editable configuration form; set `agentMailAccess` in the profile configuration instead.',
+      settingsReadOnly: 'This deployment stores settings read-only.',
+      settingsSave: 'Save',
+      settingsSaving: 'Saving…',
+      settingsSaveFailed: 'The deployment did not accept this value; please try again.',
     };
 
     const S = {
@@ -759,11 +784,86 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // Dedicated "邮件" section in the main Settings panel. Reads/writes
+    // Config.agentMailAccess through ctx.configForms so this toggle and the AI
+    // tool share one host-owned value (no separate storage).
+    function MailSettingsSection(props) {
+      const { form, t } = props;
+      const [snap, setSnap] = useState(() => form.getSnapshot());
+      useEffect(() => form.subscribe(() => setSnap(form.getSnapshot())), [form]);
+      const stored = snap.value?.agentMailAccess === true;
+      const writable = snap.writable === true;
+      const available = snap.status !== 'unavailable';
+      const [draft, setDraft] = useState(stored);
+      const [saving, setSaving] = useState(false);
+      const [failed, setFailed] = useState(false);
+      // Follow external changes to the host value (e.g. another editor).
+      useEffect(() => { setDraft(stored); }, [stored]);
+      const dirty = draft !== stored;
+      const save = async () => {
+        if (saving) return;
+        setSaving(true);
+        setFailed(false);
+        let landed = false;
+        try {
+          // form.set fences the write with the latest known revision.
+          landed = await form.set('agentMailAccess', draft);
+        } catch { landed = false; }
+        setSaving(false);
+        if (!landed) setFailed(true);
+      };
+      return h('div', { style: { padding: 4 } },
+        h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, t('settingsTitle')),
+        h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, t('settingsDescription')),
+        h(SettingsForm, {
+          labels: {
+            unavailable: t('settingsUnavailable'),
+            readOnly: t('settingsReadOnly'),
+            saveFailed: t('settingsSaveFailed'),
+            save: t('settingsSave'),
+            saving: t('settingsSaving'),
+          },
+          state: {
+            available,
+            writable,
+            dirty,
+            invalid: false,
+            saving,
+            failed,
+          },
+          onSave: () => { void save(); },
+          onDiscard: () => { setDraft(stored); },
+          children: [
+            h(Checkbox, {
+              id: 'settings-dsh-mail-agent-access',
+              label: t('agentMailAccessLabel'),
+              checked: draft,
+              disabled: !writable || saving,
+              onChange: (checked) => setDraft(checked === true),
+            }),
+            h('p', { style: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } }, t('agentMailAccessHint')),
+          ],
+        })
+      );
+    }
+
     return {
-      inject: ['slots', 'locale'],
+      inject: ['slots', 'locale', 'configForms'],
       apply(ctx) {
         t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-mail: dictionaries');
+        // A top-level "邮件" entry in the main Settings panel, alongside
+        // 通用 / 模型 / 插件 / 账号. Shown only while our Config is served.
+        const configForm = ctx.configForms.get(NS);
+        ctx.effect(() => ctx.configForms.whileServed([NS], () =>
+          ctx.slots.inject('settings.section', () => ctx.slots.register({
+            name: 'settings.section',
+            id: NS,
+            order: 25,
+            label: () => t('settingsTitle'),
+            locale: NS,
+            inject: () => ({ form: configForm, t: (k) => t(k) }),
+          }, MailSettingsSection))));
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
           name: 'sidebar.panellist', id: 'dsh-mail', order: 80,
           label: () => t('label'),
