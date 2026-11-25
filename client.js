@@ -4,7 +4,6 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
     const { useState, useEffect } = React;
-    const { SettingsForm, Checkbox } = require('@deepseek-ai/dsh-client-ui-primitives');
 
     const NS = 'dsh-mail';
     const API = '/api/dsh-mail';
@@ -958,82 +957,111 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // Dedicated "邮件" section in the main Settings panel. Reads/writes
-    // Config.agentMailAccess through ctx.configForms so this toggle and the AI
-    // tool share one host-owned value (no separate storage).
+    // Dedicated "邮件" section in the main Settings panel. Reads/writes the
+    // agentMailAccess switch through the plugin's own fetch route (the Host
+    // half stores it in the credential store), so this toggle and the AI tool
+    // share one host-owned value without depending on configForms, which is not
+    // available on this DSH build.
     function MailSettingsSection(props) {
-      const { form, t } = props;
-      const [snap, setSnap] = useState(() => form.getSnapshot());
-      useEffect(() => form.subscribe(() => setSnap(form.getSnapshot())), [form]);
-      const stored = snap.value?.agentMailAccess === true;
-      const writable = snap.writable === true;
-      const available = snap.status !== 'unavailable';
-      const [draft, setDraft] = useState(stored);
+      const tr = props && props.t ? props.t : t;
+      const [draft, setDraft] = useState(false);
+      const [stored, setStored] = useState(false);
       const [saving, setSaving] = useState(false);
+      const [loaded, setLoaded] = useState(false);
       const [failed, setFailed] = useState(false);
-      useEffect(() => { setDraft(stored); }, [stored]);
-      const dirty = draft !== stored;
+
+      useEffect(() => {
+        let alive = true;
+        fetch(API, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op: 'getSettings' }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            if (!alive) return;
+            const on = data && data.ok && data.settings && data.settings.agentMailAccess === true;
+            setStored(on);
+            setDraft(on);
+            setLoaded(true);
+          })
+          .catch(() => { if (alive) setLoaded(true); });
+        return () => { alive = false; };
+      }, []);
+
       const save = async () => {
         if (saving) return;
         setSaving(true);
         setFailed(false);
-        let landed = false;
         try {
-          landed = await form.set('agentMailAccess', draft);
-        } catch { landed = false; }
+          const r = await fetch(API, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ op: 'setSettings', value: { agentMailAccess: draft } }),
+          });
+          const data = await r.json();
+          if (!r.ok || !data || data.ok === false) throw new Error('save failed');
+          setStored(draft);
+        } catch { setFailed(true); }
         setSaving(false);
-        if (!landed) setFailed(true);
       };
-      return h('div', { style: { padding: 4 } },
-        h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, t('settingsTitle')),
-        h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, t('settingsDescription')),
-        h(SettingsForm, {
-          labels: {
-            unavailable: t('settingsUnavailable'),
-            readOnly: t('settingsReadOnly'),
-            saveFailed: t('settingsSaveFailed'),
-            save: t('settingsSave'),
-            saving: t('settingsSaving'),
-          },
-          state: {
-            available,
-            writable,
-            dirty,
-            invalid: false,
-            saving,
-            failed,
-          },
-          onSave: () => { void save(); },
-          onDiscard: () => { setDraft(stored); },
-          children: [
-            h(Checkbox, {
-              id: 'settings-dsh-mail-agent-access',
-              label: t('agentMailAccessLabel'),
-              checked: draft,
-              disabled: !writable || saving,
-              onChange: (checked) => setDraft(checked === true),
-            }),
-            h('p', { style: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } }, t('agentMailAccessHint')),
-          ],
-        })
+
+      const dirty = draft !== stored;
+      return h('div', { style: { padding: 4, maxWidth: 560 } },
+        h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, tr('settingsTitle')),
+        h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('settingsDescription')),
+        h('label', {
+          htmlFor: 'settings-dsh-mail-agent-access',
+          style: { display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)' },
+        },
+          h('input', {
+            id: 'settings-dsh-mail-agent-access',
+            type: 'checkbox',
+            checked: draft,
+            disabled: saving || !loaded,
+            onChange: (e) => setDraft(!!(e && e.target && e.target.checked)),
+            style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
+          }),
+          tr('agentMailAccessLabel')
+        ),
+        h('p', { style: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } }, tr('agentMailAccessHint')),
+        failed ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed')) : null,
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
+          h('button', {
+            type: 'button',
+            disabled: !dirty || saving,
+            onClick: () => { void save(); },
+            style: {
+              padding: '6px 16px', borderRadius: 6, border: 'none', cursor: dirty && !saving ? 'pointer' : 'default',
+              background: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-bg-base)', fontSize: 13,
+              opacity: dirty && !saving ? 1 : 0.5,
+            },
+          }, saving ? tr('settingsSaving') : tr('settingsSave')),
+          dirty ? h('button', {
+            type: 'button',
+            disabled: saving,
+            onClick: () => setDraft(stored),
+            style: {
+              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
+              background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, cursor: 'pointer',
+            },
+          }, tr('cancel')) : null
+        )
       );
     }
 
     return {
-      inject: ['slots', 'locale', 'configForms'],
+      inject: ['slots', 'locale'],
       apply(ctx) {
         t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-mail: dictionaries');
-        const configForm = ctx.configForms.get(NS);
-        ctx.effect(() => ctx.configForms.whileServed([NS], () =>
-          ctx.slots.inject('settings.section', () => ctx.slots.register({
-            name: 'settings.section',
-            id: NS,
-            order: 25,
-            label: () => t('settingsTitle'),
-            locale: NS,
-            inject: () => ({ form: configForm, t: (k) => t(k) }),
-          }, MailSettingsSection))));
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: NS,
+          order: 25,
+          label: () => t('settingsTitle'),
+          locale: NS,
+        }, MailSettingsSection));
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
           name: 'sidebar.panellist', id: 'dsh-mail', order: 80,
           label: () => t('label'),

@@ -8,8 +8,6 @@ const BRIDGE_PATH = fileURLToPath(new URL('./bridge.py', import.meta.url));
 
 export const inject = ['connection', 'credentials', 'tools'];
 
-export { Config } from './config.js';
-import { Config } from './config.js';
 import { mailQueryTool } from './tools.js';
 
 const API = '/api/dsh-mail';
@@ -68,6 +66,21 @@ function outboxKey(id) {
 
 function contactsKey(id) {
   return 'mail-contacts/' + id;
+}
+
+// Global plugin settings live under their own scope so listAccounts (which
+// treats every "mail/<id>" record as an account) never picks this record up.
+const SETTINGS_KEY = 'mail-settings/main';
+
+async function readSettings(ctx) {
+  const data = await readData(ctx, SETTINGS_KEY, { agentMailAccess: false });
+  return { agentMailAccess: data.agentMailAccess === true };
+}
+
+async function writeSettings(ctx, value) {
+  const next = { agentMailAccess: !!(value && value.agentMailAccess === true) };
+  await writeData(ctx, SETTINGS_KEY, next);
+  return next;
 }
 
 // Read a plain JSON payload record (kind 'grant') from the credential store, returning
@@ -160,6 +173,10 @@ async function handleRequest(ctx, request) {
   const op = body.op || url.searchParams.get('op');
   try {
     switch (op) {
+      case 'getSettings':
+        return json({ ok: true, settings: await readSettings(ctx) });
+      case 'setSettings':
+        return json({ ok: true, settings: await writeSettings(ctx, body.value) });
       case 'listAccounts':
         return json({ ok: true, accounts: await listAccounts(ctx) });
       case 'saveAccount': {
@@ -307,7 +324,7 @@ async function handleRequest(ctx, request) {
   }
 }
 
-export function apply(ctx, config) {
+export function apply(ctx) {
   ctx.effect(() => ctx.connection.fetch.register({
     path: API,
     methods: ['POST'],
@@ -318,5 +335,8 @@ export function apply(ctx, config) {
   // Read-only mailbox tool for the AI assistant. The tool itself checks the
   // `agentMailAccess` setting on every call, so turning the switch off revokes
   // access immediately without reloading the plugin.
-  ctx.effect(() => ctx.tools.register(mailQueryTool(ctx, config, handleRequest)), 'dsh-mail: mail_query tool');
+  ctx.effect(() => ctx.tools.register(mailQueryTool(
+    ctx, handleRequest,
+    async () => (await readSettings(ctx)).agentMailAccess === true
+  )), 'dsh-mail: mail_query tool');
 }

@@ -29,7 +29,6 @@
   },
   "exports": {
     ".": "./index.js",
-    "./config": "./config.js",
     "./tools": "./tools.js",
     "./client": "./client.js",
     "./bridge.py": "./bridge.py",
@@ -38,7 +37,6 @@
   },
   "files": [
     "index.js",
-    "config.js",
     "tools.js",
     "client.js",
     "bridge.py",
@@ -56,11 +54,7 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-slots"
-      ]
+      "inject": []
     }
   },
   "scripts": {

@@ -1,5 +1,3 @@
-import { liveValue } from './config.js';
-
 /**
  * Model-facing mailbox query tool.
  *
@@ -18,8 +16,11 @@ import { liveValue } from './config.js';
  * from a local-link plugin. `defineTool` is only a DSL-to-JSON-Schema converter;
  * a plain ToolDefinition is registered identically.
  */
-export function mailQueryTool(ctx, config, handleRequest) {
-  const gate = () => liveValue(config && config.agentMailAccess) === true;
+export function mailQueryTool(ctx, handleRequest, isEnabled) {
+  // Gate is asynchronous: the authoritative switch lives in the credential
+  // store (same source as the Settings UI), so we read it on every call through
+  // the provided predicate. No access is granted unless it returns true.
+  const gate = async () => (typeof isEnabled === 'function' && (await isEnabled()) === true);
 
   function disabledValue() {
     return {
@@ -91,7 +92,7 @@ export function mailQueryTool(ctx, config, handleRequest) {
       render,
     },
     async execute(args, exec) {
-      if (!gate()) return disabledValue();
+      if (!(await gate())) return disabledValue();
 
       try {
         const a = args || {};
