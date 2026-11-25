@@ -140,6 +140,19 @@ window.__ModuleLoader__.load({
       notifyModePet: '桌宠播报',
       notifyModeSystem: '系统通知（需浏览器权限）',
       notifyModeBoth: '桌宠播报 + 系统通知',
+      notifyCheckNow: '立即检查新邮件',
+      notifyChecking: '检查中…',
+      notifyCheckDone: '检查完成：发现 {n} 封新邮件',
+      notifyDiagTitle: '检测状态',
+      notifyDiagRunning: '轮询运行中',
+      notifyDiagStopped: '轮询未运行',
+      notifyDiagAccounts: '账号数',
+      notifyDiagChecks: '检查次数',
+      notifyDiagAlerts: '播报次数',
+      notifyDiagLastCheck: '上次检查',
+      notifyDiagNever: '从未',
+      notifyDiagError: '最近错误',
+      notifyDiagOk: '正常',
     };
     const en = {
       label: 'Mail',
@@ -239,6 +252,19 @@ window.__ModuleLoader__.load({
       notifyModePet: 'Pet announcement',
       notifyModeSystem: 'System notification (needs browser permission)',
       notifyModeBoth: 'Pet announcement + system notification',
+      notifyCheckNow: 'Check new mail now',
+      notifyChecking: 'Checking…',
+      notifyCheckDone: 'Check complete: {n} new message(s)',
+      notifyDiagTitle: 'Detection status',
+      notifyDiagRunning: 'Poller running',
+      notifyDiagStopped: 'Poller not running',
+      notifyDiagAccounts: 'Accounts',
+      notifyDiagChecks: 'Checks',
+      notifyDiagAlerts: 'Alerts',
+      notifyDiagLastCheck: 'Last check',
+      notifyDiagNever: 'Never',
+      notifyDiagError: 'Last error',
+      notifyDiagOk: 'OK',
     };
 
     // ---------------------------------------------------------------------
@@ -411,7 +437,23 @@ window.__ModuleLoader__.load({
       busy: false,
       lastError: null, // last notification failure reason, surfaced in settings
       petId: null,     // cached desktop-pet instance id
+      // Live diagnostics. The detection chain runs in the background with no UI,
+      // so without this the user cannot tell a working poller from a dead one.
+      diag: {
+        running: false,   // is a poll timer armed?
+        accounts: 0,      // accounts seen on the last check
+        checks: 0,        // successful poll ticks
+        alerts: 0,        // new-mail alerts fired
+        lastCheck: 0,     // epoch ms of last successful poll
+        lastAlert: 0,     // epoch ms of last alert
+        error: null,      // last detection/delivery failure reason
+      },
     };
+
+    // A mail that arrived while DSH was restarting must not be swallowed by
+    // baseline seeding. On first sight we still alert on unseen messages whose
+    // Date header is within this window.
+    const RECENT_MAIL_MS = 3 * 60 * 1000;
 
     const PET_ROUTE = '/dsh-pet-7340';
 
@@ -536,33 +578,56 @@ window.__ModuleLoader__.load({
         try { NOTIFY.disposeTimer(); } catch { /* already disposed */ }
         NOTIFY.disposeTimer = null;
       }
+      NOTIFY.diag.running = false;
     }
 
     function startPoller() {
       stopPoller();
-      if (!NOTIFY.ctx || !NOTIFY.settings.notifyEnabled) return;
+      if (!NOTIFY.ctx || !NOTIFY.settings.notifyEnabled) {
+        NOTIFY.diag.error = NOTIFY.ctx ? 'notifyEnabled=false' : 'no-ctx';
+        return;
+      }
       // A desktop-pet announcement needs no browser permission. Only the
       // pure "system notification" mode requires it; in that case start the
       // poller once permission is granted via the settings button.
       const mode = NOTIFY.settings.notifyMode || 'pet';
-      if (mode === 'system' && notifyPermission() !== 'granted') return;
+      if (mode === 'system' && notifyPermission() !== 'granted') {
+        NOTIFY.diag.error = 'permission:' + notifyPermission();
+        return;
+      }
       const delayMs = Math.max(15, NOTIFY.settings.notifyInterval || 60) * 1000;
       NOTIFY.disposeTimer = armPoller(() => { void pollNewMail(); }, delayMs);
+      NOTIFY.diag.running = true;
+      NOTIFY.diag.error = null;
       void pollNewMail(); // seed baselines on start without spamming old mail
     }
 
+    // Detect new mail and alert. Returns a diag snapshot so the "check now"
+    // button can show what actually happened.
     async function pollNewMail() {
-      if (NOTIFY.busy) return;
+      if (NOTIFY.busy) return Object.assign({}, NOTIFY.diag);
       NOTIFY.busy = true;
       try {
         const mode = NOTIFY.settings.notifyMode || 'pet';
-        if (mode === 'system' && notifyPermission() !== 'granted') return;
+        if (mode === 'system' && notifyPermission() !== 'granted') {
+          NOTIFY.diag.error = 'permission:' + notifyPermission();
+          return Object.assign({}, NOTIFY.diag);
+        }
         const ar = await fetch(API, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ op: 'listAccounts' }),
         });
         const ad = await ar.json();
-        const accounts = ad && ad.ok && Array.isArray(ad.accounts) ? ad.accounts : [];
+        if (!ad || ad.ok === false || !Array.isArray(ad.accounts)) {
+          NOTIFY.diag.error = 'listAccounts:' + (ad && ad.error ? ad.error : 'bad-response');
+          return Object.assign({}, NOTIFY.diag);
+        }
+        const accounts = ad.accounts;
+        NOTIFY.diag.accounts = accounts.length;
+        NOTIFY.diag.checks += 1;
+        NOTIFY.diag.lastCheck = Date.now();
+        NOTIFY.diag.error = null;
+        const now = Date.now();
         for (const acc of accounts) {
           try {
             const mr = await fetch(API, {
@@ -570,31 +635,58 @@ window.__ModuleLoader__.load({
               body: JSON.stringify({ op: 'listMessages', id: acc.id, limit: 20 }),
             });
             const md = await mr.json();
-            if (!md || md.ok === false || !Array.isArray(md.messages)) continue;
+            if (!md || md.ok === false || !Array.isArray(md.messages)) {
+              NOTIFY.diag.error = 'listMessages:' + (acc.name || acc.id) + ':' + (md && md.error ? md.error : 'bad-response');
+              continue;
+            }
             const uids = md.messages.map(m => String(m.uid));
             const prev = NOTIFY.baselines[acc.id];
             NOTIFY.baselines[acc.id] = uids;
-            if (!prev) continue; // first observation: seed only
+            if (!prev) {
+              // First observation: normally seed only, but a mail that arrived
+              // during a restart (unread + recent Date header) must still alert.
+              const recent = md.messages.filter(m =>
+                m && m.seen === false && m.date &&
+                (now - Date.parse(m.date)) >= 0 &&
+                (now - Date.parse(m.date)) <= RECENT_MAIL_MS
+              );
+              if (recent.length === 0) continue;
+              const latest = recent[0] || {};
+              const who = acc.name ? acc.name + '：' : '';
+              const res = await deliverAlert(
+                t('notifyTitle'),
+                who + (latest.subject || t('noSubject')) + ' · ' + recent.length + ' ' + t('notifyBody'),
+                { tag: 'dsh-mail-new' }
+              );
+              NOTIFY.diag.alerts += 1;
+              NOTIFY.diag.lastAlert = Date.now();
+              if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
+              continue;
+            }
             const prevSet = new Set(prev);
             const fresh = md.messages.filter(m => !prevSet.has(String(m.uid)));
             if (fresh.length > 0) {
               const latest = fresh[0] || {};
               const who = acc.name ? acc.name + '：' : '';
-              void deliverAlert(
+              const res = await deliverAlert(
                 t('notifyTitle'),
                 who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody'),
                 { tag: 'dsh-mail-new' }
               );
+              NOTIFY.diag.alerts += 1;
+              NOTIFY.diag.lastAlert = Date.now();
+              if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
             }
-          } catch {
-            // One account failing must not stop the others.
+          } catch (e) {
+            NOTIFY.diag.error = 'account:' + (acc.name || acc.id) + ':' + (e && e.message ? e.message : String(e));
           }
         }
-      } catch {
-        // Transient network / auth error: the next tick retries.
+      } catch (e) {
+        NOTIFY.diag.error = 'poll:' + (e && e.message ? e.message : String(e));
       } finally {
         NOTIFY.busy = false;
       }
+      return Object.assign({}, NOTIFY.diag);
     }
 
     async function refreshNotifySettings() {
@@ -1267,6 +1359,9 @@ window.__ModuleLoader__.load({
       const [asking, setAsking] = useState(false);
       const [tested, setTested] = useState(false);
       const [testMsg, setTestMsg] = useState('');
+      const [checking, setChecking] = useState(false);
+      const [checkMsg, setCheckMsg] = useState('');
+      const [diag, setDiag] = useState(() => Object.assign({}, NOTIFY.diag));
 
       useEffect(() => {
         let alive = true;
@@ -1301,6 +1396,15 @@ window.__ModuleLoader__.load({
           setFailed(false);
         }
       }, [draft, stored]);
+
+      // Mirror the background engine's diagnostics into this panel while it is
+      // open, so checks/alerts/errors update live without a manual refresh.
+      useEffect(() => {
+        const sync = () => setDiag(Object.assign({}, NOTIFY.diag));
+        sync();
+        const id = setInterval(sync, 3000);
+        return () => clearInterval(id);
+      }, []);
 
       const save = async () => {
         if (saving) return;
@@ -1367,6 +1471,25 @@ window.__ModuleLoader__.load({
           setTested(false);
           setTestMsg(tr('notifyTestFailed') + (NOTIFY.lastError ? ' (' + NOTIFY.lastError + ')' : ''));
         }
+      };
+
+      // Run the real detection chain on demand and refresh the diagnostics.
+      // This is the only way to tell a live poller from a dead one without
+      // waiting for an actual mail to arrive.
+      const checkNow = async () => {
+        if (checking) return;
+        setChecking(true);
+        const before = NOTIFY.diag.alerts;
+        try {
+          const snap = await pollNewMail();
+          setDiag(Object.assign({}, snap));
+          const found = Math.max(0, (snap && snap.alerts ? snap.alerts : 0) - before);
+          setCheckMsg(tr('notifyCheckDone').replace('{n}', String(found)));
+        } catch (e) {
+          setDiag(Object.assign({}, NOTIFY.diag));
+          setCheckMsg(tr('notifyTestFailed') + (e && e.message ? ' (' + e.message + ')' : ''));
+        }
+        setChecking(false);
       };
 
       const field = {
@@ -1463,6 +1586,37 @@ window.__ModuleLoader__.load({
         testMsg ? h('p', {
           style: { ...hint, color: tested ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' },
         }, testMsg) : null,
+
+        // Live detection diagnostics + manual check. These make the otherwise
+        // invisible background chain observable to the user and to us.
+        h('div', { style: { marginTop: 14, padding: 10, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l2)' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+            h('strong', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, tr('notifyDiagTitle')),
+            h('span', { style: { fontSize: 12, color: diag.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+              diag.running ? tr('notifyDiagRunning') : tr('notifyDiagStopped')),
+            h('span', { className: 'dsh-mail-spacer' }),
+            h('button', {
+              type: 'button', disabled: checking || !loaded,
+              onClick: () => { void checkNow(); },
+              style: {
+                padding: '5px 12px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
+                background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
+                fontSize: 12, cursor: checking || !loaded ? 'default' : 'pointer',
+                opacity: checking || !loaded ? 0.6 : 1,
+              },
+            }, checking ? tr('notifyChecking') : tr('notifyCheckNow'))
+          ),
+          h('div', { style: { marginTop: 6, fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } },
+            tr('notifyDiagAccounts') + ': ' + (diag.accounts || 0) + '  ·  ' +
+            tr('notifyDiagChecks') + ': ' + (diag.checks || 0) + '  ·  ' +
+            tr('notifyDiagAlerts') + ': ' + (diag.alerts || 0) + '  ·  ' +
+            tr('notifyDiagLastCheck') + ': ' + (diag.lastCheck ? new Date(diag.lastCheck).toLocaleString() : tr('notifyDiagNever'))
+          ),
+          h('div', { style: { marginTop: 2, fontSize: 12, lineHeight: 1.7, color: diag.error ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-success-primary)' } },
+            tr('notifyDiagError') + ': ' + (diag.error || tr('notifyDiagOk'))
+          ),
+          checkMsg ? h('p', { style: { margin: '6px 0 0', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, checkMsg) : null
+        ),
 
         failed
           ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed'))
