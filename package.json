@@ -3,7 +3,7 @@
   "version": "1.0.1",
   "private": false,
   "type": "module",
-  "description": "DeepSeek Harness 侧边栏邮件插件：在左侧栏收发 QQ / 163 / Gmail 等邮箱，IMAP 收信 + SMTP 发信，授权码保存在本机凭据保险箱。",
+  "description": "DeepSeek Harness 侧边栏邮件插件：在左侧栏收发 QQ / 163 / Gmail 等邮箱，IMAP 收信 + SMTP 发信，支持附件、未读角标与已读/未读筛选、新邮件提醒，授权码保存在本机凭据保险箱。",
   "license": "MIT",
   "author": "李文 <59386344+mysterycode-liwen@users.noreply.github.com>",
   "homepage": "https://github.com/mysterycode-liwen/dsh-email#readme",
