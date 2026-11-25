@@ -127,7 +127,8 @@ window.__ModuleLoader__.load({
       notifyPermissionUnsupported: '当前环境不支持系统通知',
       notifyPermissionAsking: '申请中…',
       notifyTest: '发送测试通知',
-      notifyTestSent: '测试通知已发出',
+      notifyTestSent: '测试通知已发出（请到系统通知中心查看）',
+      notifyTestFailed: '测试通知发送失败',
       notifyTitle: '新邮件',
       notifyBody: '封未读新邮件',
       notifyTestTitle: '邮件通知测试',
@@ -218,7 +219,8 @@ window.__ModuleLoader__.load({
       notifyPermissionUnsupported: 'System notifications are not supported here',
       notifyPermissionAsking: 'Requesting…',
       notifyTest: 'Send a test notification',
-      notifyTestSent: 'Test notification sent',
+      notifyTestSent: 'Test notification sent (check your notification center)',
+      notifyTestFailed: 'Failed to send test notification',
       notifyTitle: 'New mail',
       notifyBody: 'new unread message(s)',
       notifyTestTitle: 'Mail notification test',
@@ -393,6 +395,7 @@ window.__ModuleLoader__.load({
       settings: { notifyEnabled: true, notifyInterval: 60 },
       baselines: {},   // accountId -> array of last-seen uids
       busy: false,
+      lastError: null, // last notification failure reason, surfaced in settings
     };
 
     function notifyPermission() {
@@ -410,10 +413,21 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function showMailToast(title, body) {
-      if (notifyPermission() !== 'granted') return null;
+    function showMailToast(title, body, opts) {
+      const perm = notifyPermission();
+      if (perm !== 'granted') {
+        NOTIFY.lastError = perm === 'unsupported' ? 'unsupported' : 'permission:' + perm;
+        return null;
+      }
       try {
-        const n = new Notification(title, { body, tag: 'dsh-mail-new' });
+        // For real new-mail alerts a stable tag coalesces bursts. Test
+        // notifications pass a unique tag so a lingering toast never hides
+        // them (a stale tagged notification is a common "nothing happened"
+        // cause in Electron shells).
+        const options = { body };
+        const tag = opts && opts.tag;
+        if (tag) options.tag = tag;
+        const n = new Notification(title, options);
         n.onclick = () => {
           try { n.close(); } catch { /* already closed */ }
           try { window.focus(); } catch { /* headless */ }
@@ -421,8 +435,10 @@ window.__ModuleLoader__.load({
             try { NOTIFY.ctx.get('layout').selectPanel('dsh-mail'); } catch { /* panel service unavailable */ }
           }
         };
+        NOTIFY.lastError = null;
         return n;
-      } catch {
+      } catch (e) {
+        NOTIFY.lastError = 'construct: ' + (e && e.message ? e.message : String(e));
         return null;
       }
     }
@@ -487,7 +503,8 @@ window.__ModuleLoader__.load({
               const who = acc.name ? acc.name + '：' : '';
               showMailToast(
                 t('notifyTitle'),
-                who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody')
+                who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody'),
+                { tag: 'dsh-mail-new' }
               );
             }
           } catch {
@@ -1168,6 +1185,7 @@ window.__ModuleLoader__.load({
       const [perm, setPerm] = useState(() => notifyPermission());
       const [asking, setAsking] = useState(false);
       const [tested, setTested] = useState(false);
+      const [testMsg, setTestMsg] = useState('');
 
       useEffect(() => {
         let alive = true;
@@ -1220,10 +1238,31 @@ window.__ModuleLoader__.load({
         setPerm(result);
         setAsking(false);
         if (result === 'granted') startPoller();
+        return result;
       };
 
-      const sendTest = () => {
-        if (showMailToast(tr('notifyTestTitle'), tr('notifyTestBody'))) setTested(true);
+      // Always works from a user gesture: if permission has not been granted
+      // yet, request it first (browser shells suppress requests made outside
+      // a click), then fire the toast and report the real outcome inline.
+      const sendTest = async () => {
+        if (asking) return;
+        let p = notifyPermission();
+        if (p !== 'granted') {
+          p = await requestPerm();
+          if (p !== 'granted') {
+            setTested(false);
+            setTestMsg(p === 'denied' ? tr('notifyPermissionDenied') : (tr('notifyTestFailed') + ' (' + p + ')'));
+            return;
+          }
+        }
+        const n = showMailToast(tr('notifyTestTitle'), tr('notifyTestBody'));
+        if (n) {
+          setTested(true);
+          setTestMsg(tr('notifyTestSent'));
+        } else {
+          setTested(false);
+          setTestMsg(tr('notifyTestFailed') + (NOTIFY.lastError ? ' (' + NOTIFY.lastError + ')' : ''));
+        }
       };
 
       const field = {
@@ -1293,17 +1332,19 @@ window.__ModuleLoader__.load({
               : perm === 'unsupported' ? tr('notifyPermissionUnsupported') : ''
           ),
           h('button', {
-            type: 'button', disabled: perm !== 'granted',
-            onClick: sendTest,
+            type: 'button', disabled: asking || perm === 'unsupported',
+            onClick: () => { void sendTest(); },
             style: {
               padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
               background: 'transparent', color: 'var(--dsw-alias-label-primary)',
-              fontSize: 13, cursor: perm === 'granted' ? 'pointer' : 'default',
-              opacity: perm === 'granted' ? 1 : 0.5,
+              fontSize: 13, cursor: asking || perm === 'unsupported' ? 'default' : 'pointer',
+              opacity: asking || perm === 'unsupported' ? 0.5 : 1,
             },
           }, tr('notifyTest'))
         ),
-        tested ? h('p', { style: { ...hint, color: 'var(--dsw-alias-state-success-primary)' } }, tr('notifyTestSent')) : null,
+        testMsg ? h('p', {
+          style: { ...hint, color: tested ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' },
+        }, testMsg) : null,
 
         failed ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed')) : null,
         h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
