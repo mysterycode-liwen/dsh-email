@@ -116,7 +116,8 @@ window.__ModuleLoader__.load({
       settingsReadOnly: '本部署的设置为只读。',
       settingsSave: '保存',
       settingsSaving: '保存中…',
-      settingsSaveFailed: '设置未保存成功，请重试。',
+      settingsSaveFailed: '设置保存失败，请重试。',
+      settingsSaveSuccess: '设置已保存。',
       notifySectionTitle: '新邮件通知',
       notifySectionHint: '后台定时检查邮箱，收到新邮件时让桌宠气泡播报；若浏览器已授权，也会同时弹出系统通知。',
       notifyEnabledLabel: '启用新邮件提醒（桌宠播报）',
@@ -214,7 +215,8 @@ window.__ModuleLoader__.load({
       settingsReadOnly: 'This deployment stores settings read-only.',
       settingsSave: 'Save',
       settingsSaving: 'Saving…',
-      settingsSaveFailed: 'The deployment did not accept this value; please try again.',
+      settingsSaveFailed: 'Failed to save settings. Please try again.',
+      settingsSaveSuccess: 'Settings saved.',
       notifySectionTitle: 'New mail notifications',
       notifySectionHint: 'Check your mailbox in the background and have your desktop pet announce new mail in a speech bubble; a system notification is also shown when browser permission is granted.',
       notifyEnabledLabel: 'Enable new mail alerts (pet announcement)',
@@ -1260,6 +1262,7 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false);
       const [loaded, setLoaded] = useState(false);
       const [failed, setFailed] = useState(false);
+      const [saved, setSaved] = useState(false);
       const [perm, setPerm] = useState(() => notifyPermission());
       const [asking, setAsking] = useState(false);
       const [tested, setTested] = useState(false);
@@ -1290,10 +1293,20 @@ window.__ModuleLoader__.load({
         return () => { alive = false; };
       }, []);
 
+      // Clear stale save hints as soon as the user edits away from the
+      // last saved state. Avoids a lingering "已保存" after a new change.
+      useEffect(() => {
+        if (JSON.stringify(draft) !== JSON.stringify(stored) && (saved || failed)) {
+          setSaved(false);
+          setFailed(false);
+        }
+      }, [draft, stored]);
+
       const save = async () => {
         if (saving) return;
         setSaving(true);
         setFailed(false);
+        setSaved(false);
         try {
           const r = await fetch(API, {
             method: 'POST',
@@ -1302,14 +1315,20 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (!r.ok || !data || data.ok === false) throw new Error('save failed');
+          // The Host normalizes values (e.g. clamps the interval to 15..3600
+          // and whitelists notifyMode). Write the applied settings back into
+          // BOTH stored and draft, otherwise dirty stays true after save and
+          // the save button never clears — which looks like a failed save.
           const applied = data.settings || draft;
           setStored(applied);
+          setDraft(applied);
           NOTIFY.settings = {
             notifyEnabled: applied.notifyEnabled !== false,
             notifyInterval: Number(applied.notifyInterval) || 60,
             notifyMode: applied.notifyMode || 'pet',
           };
           startPoller();
+          setSaved(true);
         } catch { setFailed(true); }
         setSaving(false);
       };
@@ -1445,7 +1464,11 @@ window.__ModuleLoader__.load({
           style: { ...hint, color: tested ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' },
         }, testMsg) : null,
 
-        failed ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed')) : null,
+        failed
+          ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed'))
+          : saved
+            ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' } }, tr('settingsSaveSuccess'))
+            : null,
         h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
           h('button', {
             type: 'button',
