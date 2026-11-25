@@ -766,17 +766,23 @@ window.__ModuleLoader__.load({
       );
       if (!count) return glyph;
       const label = count > 99 ? '99+' : String(count);
+      // DSH places this glyph in a fixed-size .panelGlyph span, followed by the
+      // panel title with only a 6px gap. An absolutely-positioned badge spills
+      // out of that box and covers both the envelope and the title. Instead keep
+      // the badge in normal flow, to the RIGHT of the glyph: the wrapper grows,
+      // so DSH pushes the title aside and neither the icon nor the text is covered.
       return h('span', {
-        style: { position: 'relative', display: 'inline-block', lineHeight: 0 },
+        style: { display: 'inline-flex', alignItems: 'center', lineHeight: 0 },
         title: t('badgeTitle'),
       },
         glyph,
         h('span', {
           style: {
-            position: 'absolute', top: -6, right: -8, minWidth: 16, height: 16,
-            padding: '0 4px', borderRadius: 8, background: 'var(--dsw-alias-state-error-primary)',
-            color: 'var(--dsw-alias-bg-base)', fontSize: 10, fontWeight: 700, lineHeight: '16px',
-            textAlign: 'center', whiteSpace: 'nowrap', boxShadow: '0 0 0 2px var(--dsw-alias-bg-base)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            marginLeft: 3, height: 15, minWidth: 15, padding: '0 4px',
+            borderRadius: 8, background: 'var(--dsw-alias-state-error-primary)',
+            color: 'var(--dsw-alias-bg-base)', fontSize: 10, fontWeight: 700, lineHeight: '15px',
+            textAlign: 'center', whiteSpace: 'nowrap',
           },
         }, label)
       );
