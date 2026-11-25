@@ -250,8 +250,10 @@ window.__ModuleLoader__.load({
       '.dsh-mail-time { flex:none; font-size:11px; color:var(--dsw-alias-label-secondary); }',
       '.dsh-mail-subject { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; }',
       '.dsh-mail-preview { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; color:var(--dsw-alias-label-secondary); }',
-      '.dsh-mail-unread { width:8px; height:8px; margin-top:7px; flex:none; border-radius:50%; background:var(--dsw-alias-brand-primary); }',
-      '.dsh-mail-read .dsh-mail-from, .dsh-mail-read .dsh-mail-subject { color:var(--dsw-alias-label-secondary); font-weight:500; }',
+      '.dsh-mail-row.is-unread { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, transparent); border-left:3px solid var(--dsw-alias-brand-primary); padding-left:8px; }',
+      '.dsh-mail-row.is-unread .dsh-mail-from, .dsh-mail-row.is-unread .dsh-mail-subject { color:var(--dsw-alias-label-primary); font-weight:700; }',
+      '.dsh-mail-unread { width:9px; height:9px; margin-top:7px; flex:none; border-radius:50%; background:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }',
+      '.dsh-mail-read .dsh-mail-from, .dsh-mail-read .dsh-mail-subject { color:var(--dsw-alias-label-secondary); font-weight:400; }',
 
       /* cards / forms */
       '.dsh-mail-card { border:1px solid var(--dsw-alias-border-l1); border-radius:12px; padding:16px; margin-bottom:12px; background:var(--dsw-alias-bg-layer-1); box-shadow:0 1px 3px rgba(0,0,0,.05); }',
@@ -338,7 +340,8 @@ window.__ModuleLoader__.load({
       // default object is used for keys like `form` that start as null.
       const [value, setValue] = useState(() => (PERSIST[key] != null ? PERSIST[key] : initial));
       const update = (next) => {
-        const resolved = typeof next === 'function' ? next(PERSIST[key]) : next;
+        const current = PERSIST[key] != null ? PERSIST[key] : value;
+        const resolved = typeof next === 'function' ? next(current) : next;
         PERSIST[key] = resolved;
         setValue(resolved);
       };
@@ -438,6 +441,9 @@ window.__ModuleLoader__.load({
       const [contacts, setContacts] = usePersistent('contacts', []);
       const [contactForm, setContactForm] = usePersistent('contactForm', { name: '', email: '' });
       const [sentDetail, setSentDetail] = useState(null);
+      // Per-account cache of fetched message lists. Survives account switching
+      // and remounts so we can show cached mail immediately while refreshing.
+      const [cache, setCache] = usePersistent('mailCache', {});
 
       useEffect(() => {
         if (!PERSIST.accounts) refreshAccounts();
@@ -476,18 +482,21 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function loadMessages() {
+      async function loadMessages(showProgress) {
         if (!activeId) return;
-        setBusy(true);
-        setLoadingMessages(true);
+        // Cache-first: if we already have this account's list, keep it visible
+        // while the fresh list loads in the background (no blank/Loading flash).
+        const cached = cache[activeId];
+        if (showProgress !== false) setLoadingMessages(!(cached && cached.length));
         try {
           const data = await rpc('listMessages', { id: activeId, limit: 25 });
-          setMessages(data.messages || []);
+          const fresh = data.messages || [];
+          setMessages(fresh);
+          setCache(prev => Object.assign({}, prev, { [activeId]: fresh }));
         } catch (e) {
           reportError(e);
         } finally {
           setLoadingMessages(false);
-          setBusy(false);
         }
       }
 
@@ -534,7 +543,10 @@ window.__ModuleLoader__.load({
           return;
         }
         if (PERSIST.loadedIds.inbox !== activeId) {
-          setMessages([]);
+          // Show this account's cached messages immediately, then refresh in
+          // the background. Only clear when there is no cache for the account.
+          const cached = cache[activeId];
+          setMessages(cached || []);
           setSent([]);
           setContacts([]);
           setDetail(null);
@@ -606,11 +618,18 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function openMessage(uid) {
+      async function openMessage(msg) {
+        const uid = typeof msg === 'object' ? msg.uid : msg;
+        // Mark as read locally right away: update the visible list, the unread
+        // badge, and the per-account cache so the change survives switching away.
+        const markRead = (list) => (list || []).map(m => String(m.uid) === String(uid) ? Object.assign({}, m, { seen: true }) : m);
+        setMessages(prev => markRead(prev));
+        setCache(prev => Object.assign({}, prev, { [activeId]: markRead(prev[activeId]) }));
         setBusy(true);
         try {
           const data = await rpc('getMessage', { id: activeId, uid });
-          setDetail(data.message || data);
+          const full = data.message || data;
+          setDetail(Object.assign({}, full, { seen: true }));
           setView('detail');
         } catch (e) {
           reportError(e);
@@ -751,8 +770,8 @@ window.__ModuleLoader__.load({
                 : h('div', { className: 'dsh-mail-list' }, messages.map(m =>
                   h('div', {
                     key: m.uid,
-                    className: 'dsh-mail-row' + (m.seen === false ? '' : ' dsh-mail-read'),
-                    onClick: () => openMessage(m.uid),
+                    className: 'dsh-mail-row' + (m.seen === false ? ' is-unread' : ' dsh-mail-read'),
+                    onClick: () => openMessage(m),
                   },
                     h('div', { className: 'dsh-mail-avatar', style: { background: avatarColor(m.from || m.subject) } }, avatarLetter(m.from || m.subject)),
                     h('div', { className: 'dsh-mail-rowmain' },

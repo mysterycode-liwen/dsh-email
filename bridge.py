@@ -543,12 +543,20 @@ def op_get_message(req):
     except Exception as exc:
         return fail_result(exc)
     try:
-        typ, data = client.select('"%s"' % folder.replace('"', ""), readonly=True)
+        # Open the mailbox writable so reading a message can mark it \Seen,
+        # matching normal mail-client behaviour. BODY.PEEK reads the content
+        # without marking, then we set the flag explicitly so read state
+        # persists across reloads. Marking is best-effort and never fails read.
+        typ, data = client.select('"%s"' % folder.replace('"', ""), readonly=False)
         if typ != "OK":
             return {"ok": False, "error": "选择文件夹失败：%s" % imap_data_text(data), "code": "folder"}
-        typ, msg_data = client.uid("FETCH", str(uid), "(RFC822)")
+        typ, msg_data = client.uid("FETCH", str(uid), "(BODY.PEEK[])")
         if typ != "OK" or not msg_data or msg_data[0] is None:
             return {"ok": False, "error": "未找到这封邮件（可能已被删除）。", "code": "not_found"}
+        try:
+            client.uid("STORE", str(uid), "+FLAGS", "(\\Seen)")
+        except Exception:
+            pass
         from email import message_from_bytes
         msg = message_from_bytes(msg_data[0][1])
         date_str = msg.get("Date")
