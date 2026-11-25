@@ -117,6 +117,21 @@ window.__ModuleLoader__.load({
       settingsSave: '保存',
       settingsSaving: '保存中…',
       settingsSaveFailed: '设置未保存成功，请重试。',
+      notifySectionTitle: '新邮件通知',
+      notifySectionHint: '后台定时检查邮箱，收到新邮件时由 DeepSeek Harness 弹出系统通知。',
+      notifyEnabledLabel: '启用新邮件通知（需浏览器通知权限）',
+      notifyIntervalLabel: '检查间隔（秒）',
+      notifyPermission: '申请通知权限',
+      notifyPermissionGranted: '通知权限已开启',
+      notifyPermissionDenied: '通知权限被浏览器阻止，请在浏览器设置中允许本站通知',
+      notifyPermissionUnsupported: '当前环境不支持系统通知',
+      notifyPermissionAsking: '申请中…',
+      notifyTest: '发送测试通知',
+      notifyTestSent: '测试通知已发出',
+      notifyTitle: '新邮件',
+      notifyBody: '封未读新邮件',
+      notifyTestTitle: '邮件通知测试',
+      notifyTestBody: '如果你看到这条通知，说明新邮件提醒已正常工作。',
     };
     const en = {
       label: 'Mail',
@@ -193,6 +208,21 @@ window.__ModuleLoader__.load({
       settingsSave: 'Save',
       settingsSaving: 'Saving…',
       settingsSaveFailed: 'The deployment did not accept this value; please try again.',
+      notifySectionTitle: 'New mail notifications',
+      notifySectionHint: 'Check your mailbox in the background and let DeepSeek Harness show a system notification when new mail arrives.',
+      notifyEnabledLabel: 'Enable new mail notifications (needs browser permission)',
+      notifyIntervalLabel: 'Check interval (seconds)',
+      notifyPermission: 'Grant notification permission',
+      notifyPermissionGranted: 'Notification permission is granted',
+      notifyPermissionDenied: 'Notifications are blocked by the browser; allow them for this site in browser settings',
+      notifyPermissionUnsupported: 'System notifications are not supported here',
+      notifyPermissionAsking: 'Requesting…',
+      notifyTest: 'Send a test notification',
+      notifyTestSent: 'Test notification sent',
+      notifyTitle: 'New mail',
+      notifyBody: 'new unread message(s)',
+      notifyTestTitle: 'Mail notification test',
+      notifyTestBody: 'If you can see this, new mail notifications are working.',
     };
 
     // ---------------------------------------------------------------------
@@ -346,6 +376,146 @@ window.__ModuleLoader__.load({
         setValue(resolved);
       };
       return [value, update];
+    }
+
+    // ---------------------------------------------------------------------
+    // New-mail detection + system notification engine.
+    // DSH has no dedicated toast service: like DSH itself and the pet plugin,
+    // we use the browser Notification API. A single process-wide timer polls
+    // every configured account via the existing listMessages op and compares
+    // UID baselines; newly arrived messages raise a system notification. This
+    // lives at module scope so it keeps working even while the mail panel is
+    // closed, and is intentionally independent of MailPanel's React state.
+    // ---------------------------------------------------------------------
+    const NOTIFY = {
+      ctx: null,
+      disposeTimer: null,
+      settings: { notifyEnabled: true, notifyInterval: 60 },
+      baselines: {},   // accountId -> array of last-seen uids
+      busy: false,
+    };
+
+    function notifyPermission() {
+      return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+    }
+
+    async function askNotifyPermission() {
+      if (typeof Notification === 'undefined') return 'unsupported';
+      if (Notification.permission === 'granted') return 'granted';
+      if (Notification.permission === 'denied') return 'denied';
+      try {
+        return await Notification.requestPermission();
+      } catch {
+        return 'error';
+      }
+    }
+
+    function showMailToast(title, body) {
+      if (notifyPermission() !== 'granted') return null;
+      try {
+        const n = new Notification(title, { body, tag: 'dsh-mail-new' });
+        n.onclick = () => {
+          try { n.close(); } catch { /* already closed */ }
+          try { window.focus(); } catch { /* headless */ }
+          if (NOTIFY.ctx) {
+            try { NOTIFY.ctx.get('layout').selectPanel('dsh-mail'); } catch { /* panel service unavailable */ }
+          }
+        };
+        return n;
+      } catch {
+        return null;
+      }
+    }
+
+    // Prefer the Cordis timer service; fall back to the browser timer so the
+    // engine works in every client runtime variant.
+    function armPoller(callback, delayMs) {
+      const ctx = NOTIFY.ctx;
+      let timer = ctx && ctx.timer;
+      if ((!timer || typeof timer.interval !== 'function') && ctx && typeof ctx.get === 'function') {
+        try { timer = ctx.get('timer'); } catch { timer = null; }
+      }
+      if (timer && typeof timer.interval === 'function') return timer.interval(callback, delayMs);
+      // Last resort: plain browser timer (client halves expose setInterval).
+      const id = setInterval(callback, delayMs);
+      return () => clearInterval(id);
+    }
+
+    function stopPoller() {
+      if (NOTIFY.disposeTimer) {
+        try { NOTIFY.disposeTimer(); } catch { /* already disposed */ }
+        NOTIFY.disposeTimer = null;
+      }
+    }
+
+    function startPoller() {
+      stopPoller();
+      if (!NOTIFY.ctx || !NOTIFY.settings.notifyEnabled) return;
+      if (notifyPermission() !== 'granted') return; // nothing can be shown yet
+      const delayMs = Math.max(15, NOTIFY.settings.notifyInterval || 60) * 1000;
+      NOTIFY.disposeTimer = armPoller(() => { void pollNewMail(); }, delayMs);
+      void pollNewMail(); // seed baselines on start without spamming old mail
+    }
+
+    async function pollNewMail() {
+      if (NOTIFY.busy) return;
+      NOTIFY.busy = true;
+      try {
+        if (notifyPermission() !== 'granted') return;
+        const ar = await fetch(API, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op: 'listAccounts' }),
+        });
+        const ad = await ar.json();
+        const accounts = ad && ad.ok && Array.isArray(ad.accounts) ? ad.accounts : [];
+        for (const acc of accounts) {
+          try {
+            const mr = await fetch(API, {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ op: 'listMessages', id: acc.id, limit: 20 }),
+            });
+            const md = await mr.json();
+            if (!md || md.ok === false || !Array.isArray(md.messages)) continue;
+            const uids = md.messages.map(m => String(m.uid));
+            const prev = NOTIFY.baselines[acc.id];
+            NOTIFY.baselines[acc.id] = uids;
+            if (!prev) continue; // first observation: seed only
+            const prevSet = new Set(prev);
+            const fresh = md.messages.filter(m => !prevSet.has(String(m.uid)));
+            if (fresh.length > 0) {
+              const latest = fresh[0] || {};
+              const who = acc.name ? acc.name + '：' : '';
+              showMailToast(
+                t('notifyTitle'),
+                who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody')
+              );
+            }
+          } catch {
+            // One account failing must not stop the others.
+          }
+        }
+      } catch {
+        // Transient network / auth error: the next tick retries.
+      } finally {
+        NOTIFY.busy = false;
+      }
+    }
+
+    async function refreshNotifySettings() {
+      try {
+        const r = await fetch(API, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op: 'getSettings' }),
+        });
+        const data = await r.json();
+        if (data && data.ok && data.settings) {
+          NOTIFY.settings = {
+            notifyEnabled: data.settings.notifyEnabled !== false,
+            notifyInterval: Number(data.settings.notifyInterval) || 60,
+          };
+        }
+      } catch { /* keep current settings */ }
+      startPoller();
     }
 
     // Solid envelope for the sidebar panel icon (the sidebar draws its own
@@ -990,11 +1160,14 @@ window.__ModuleLoader__.load({
     // available on this DSH build.
     function MailSettingsSection(props) {
       const tr = props && props.t ? props.t : t;
-      const [draft, setDraft] = useState(false);
-      const [stored, setStored] = useState(false);
+      const [draft, setDraft] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60 });
+      const [stored, setStored] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60 });
       const [saving, setSaving] = useState(false);
       const [loaded, setLoaded] = useState(false);
       const [failed, setFailed] = useState(false);
+      const [perm, setPerm] = useState(() => notifyPermission());
+      const [asking, setAsking] = useState(false);
+      const [tested, setTested] = useState(false);
 
       useEffect(() => {
         let alive = true;
@@ -1006,9 +1179,14 @@ window.__ModuleLoader__.load({
           .then(r => r.json())
           .then(data => {
             if (!alive) return;
-            const on = data && data.ok && data.settings && data.settings.agentMailAccess === true;
-            setStored(on);
-            setDraft(on);
+            const s = data && data.ok && data.settings ? data.settings : {};
+            const next = {
+              agentMailAccess: s.agentMailAccess === true,
+              notifyEnabled: s.notifyEnabled !== false,
+              notifyInterval: Number(s.notifyInterval) || 60,
+            };
+            setStored(next);
+            setDraft(next);
             setLoaded(true);
           })
           .catch(() => { if (alive) setLoaded(true); });
@@ -1023,34 +1201,110 @@ window.__ModuleLoader__.load({
           const r = await fetch(API, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ op: 'setSettings', value: { agentMailAccess: draft } }),
+            body: JSON.stringify({ op: 'setSettings', value: draft }),
           });
           const data = await r.json();
           if (!r.ok || !data || data.ok === false) throw new Error('save failed');
-          setStored(draft);
+          const applied = data.settings || draft;
+          setStored(applied);
+          NOTIFY.settings = { notifyEnabled: applied.notifyEnabled !== false, notifyInterval: Number(applied.notifyInterval) || 60 };
+          startPoller();
         } catch { setFailed(true); }
         setSaving(false);
       };
 
-      const dirty = draft !== stored;
+      const requestPerm = async () => {
+        if (asking) return;
+        setAsking(true);
+        const result = await askNotifyPermission();
+        setPerm(result);
+        setAsking(false);
+        if (result === 'granted') startPoller();
+      };
+
+      const sendTest = () => {
+        if (showMailToast(tr('notifyTestTitle'), tr('notifyTestBody'))) setTested(true);
+      };
+
+      const field = {
+        display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+        fontSize: 14, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)',
+      };
+      const hint = { margin: '6px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' };
+      const numInput = {
+        width: 84, padding: '4px 8px', borderRadius: 6, fontSize: 13,
+        border: '1px solid var(--dsw-alias-border-l2)',
+        background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+      };
+      const dirty = JSON.stringify(draft) !== JSON.stringify(stored);
       return h('div', { style: { padding: 4, maxWidth: 560 } },
         h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, tr('settingsTitle')),
-        h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('settingsDescription')),
-        h('label', {
-          htmlFor: 'settings-dsh-mail-agent-access',
-          style: { display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)' },
-        },
+
+        // AI assistant access toggle (unchanged behaviour).
+        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('settingsDescription')),
+        h('label', { htmlFor: 'settings-dsh-mail-agent-access', style: field },
           h('input', {
-            id: 'settings-dsh-mail-agent-access',
-            type: 'checkbox',
-            checked: draft,
-            disabled: saving || !loaded,
-            onChange: (e) => setDraft(!!(e && e.target && e.target.checked)),
+            id: 'settings-dsh-mail-agent-access', type: 'checkbox',
+            checked: draft.agentMailAccess, disabled: saving || !loaded,
+            onChange: (e) => setDraft({ ...draft, agentMailAccess: !!(e && e.target && e.target.checked) }),
             style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
           }),
           tr('agentMailAccessLabel')
         ),
-        h('p', { style: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } }, tr('agentMailAccessHint')),
+        h('p', { style: hint }, tr('agentMailAccessHint')),
+
+        // New-mail notification section.
+        h('h3', { style: { margin: '24px 0 8px', fontSize: 15, lineHeight: 1.4 } }, tr('notifySectionTitle')),
+        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('notifySectionHint')),
+        h('label', { htmlFor: 'settings-dsh-mail-notify', style: field },
+          h('input', {
+            id: 'settings-dsh-mail-notify', type: 'checkbox',
+            checked: draft.notifyEnabled, disabled: saving || !loaded,
+            onChange: (e) => setDraft({ ...draft, notifyEnabled: !!(e && e.target && e.target.checked) }),
+            style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
+          }),
+          tr('notifyEnabledLabel')
+        ),
+        h('label', { htmlFor: 'settings-dsh-mail-interval', style: { ...field, marginTop: 10 } },
+          h('span', null, tr('notifyIntervalLabel')),
+          h('input', {
+            id: 'settings-dsh-mail-interval', type: 'number', min: 15, max: 3600,
+            value: draft.notifyInterval, disabled: saving || !loaded,
+            onChange: (e) => setDraft({ ...draft, notifyInterval: Number(e && e.target && e.target.value) || 60 }),
+            style: numInput,
+          })
+        ),
+
+        // Permission row.
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 } },
+          h('button', {
+            type: 'button', disabled: asking || perm === 'granted' || perm === 'unsupported',
+            onClick: () => { void requestPerm(); },
+            style: {
+              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
+              background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+              fontSize: 13, cursor: asking || perm === 'granted' ? 'default' : 'pointer',
+              opacity: asking || perm === 'granted' ? 0.6 : 1,
+            },
+          }, asking ? tr('notifyPermissionAsking') : tr('notifyPermission')),
+          h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
+            perm === 'granted' ? tr('notifyPermissionGranted')
+              : perm === 'denied' ? tr('notifyPermissionDenied')
+              : perm === 'unsupported' ? tr('notifyPermissionUnsupported') : ''
+          ),
+          h('button', {
+            type: 'button', disabled: perm !== 'granted',
+            onClick: sendTest,
+            style: {
+              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
+              background: 'transparent', color: 'var(--dsw-alias-label-primary)',
+              fontSize: 13, cursor: perm === 'granted' ? 'pointer' : 'default',
+              opacity: perm === 'granted' ? 1 : 0.5,
+            },
+          }, tr('notifyTest'))
+        ),
+        tested ? h('p', { style: { ...hint, color: 'var(--dsw-alias-state-success-primary)' } }, tr('notifyTestSent')) : null,
+
         failed ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed')) : null,
         h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
           h('button', {
@@ -1081,6 +1335,16 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-mail: dictionaries');
+        // Start the always-on new-mail poller once the client context is live;
+        // dispose it if this plugin half is torn down.
+        ctx.effect(() => {
+          NOTIFY.ctx = ctx;
+          void refreshNotifySettings();
+          return () => {
+            stopPoller();
+            NOTIFY.ctx = null;
+          };
+        }, 'dsh-mail: new-mail notifications');
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: NS,

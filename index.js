@@ -73,12 +73,26 @@ function contactsKey(id) {
 const SETTINGS_KEY = 'mail-settings/main';
 
 async function readSettings(ctx) {
-  const data = await readData(ctx, SETTINGS_KEY, { agentMailAccess: false });
-  return { agentMailAccess: data.agentMailAccess === true };
+  const data = await readData(ctx, SETTINGS_KEY, {});
+  const rawInterval = Number(data.notifyInterval);
+  return {
+    agentMailAccess: data.agentMailAccess === true,
+    // New-mail notifications are on by default; the browser permission is
+    // still requested on the Client side before any toast can appear.
+    notifyEnabled: data.notifyEnabled !== false,
+    // Clamp to 15s..3600s; 60s default. Keeps IMAP polling reasonable.
+    notifyInterval: Number.isFinite(rawInterval) ? Math.min(3600, Math.max(15, Math.round(rawInterval))) : 60,
+  };
 }
 
 async function writeSettings(ctx, value) {
-  const next = { agentMailAccess: !!(value && value.agentMailAccess === true) };
+  const input = value && typeof value === 'object' ? value : {};
+  const rawInterval = Number(input.notifyInterval);
+  const next = {
+    agentMailAccess: input.agentMailAccess === true,
+    notifyEnabled: input.notifyEnabled !== false,
+    notifyInterval: Number.isFinite(rawInterval) ? Math.min(3600, Math.max(15, Math.round(rawInterval))) : 60,
+  };
   await writeData(ctx, SETTINGS_KEY, next);
   return next;
 }
