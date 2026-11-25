@@ -117,6 +117,10 @@ window.__ModuleLoader__.load({
       saveContact: '保存联系人',
       deleteContact: '删除',
       contactsHint: '手动添加的联系人仅保存在本地，不会上传到邮箱服务器。',
+      addSender: '加为联系人',
+      addRecipient: '加收件人',
+      contactAdded: '已加为联系人。',
+      contactExists: '已在联系人中。',
       emailRequired: '请填写有效的邮箱地址。',
       saved: '已保存。',
       selectContact: '用此地址写邮件',
@@ -255,6 +259,10 @@ window.__ModuleLoader__.load({
       saveContact: 'Save contact',
       deleteContact: 'Delete',
       contactsHint: 'Contacts you add are saved locally only and are not uploaded to the mail server.',
+      addSender: 'Add sender',
+      addRecipient: 'Add recipient',
+      contactAdded: 'Added to contacts.',
+      contactExists: 'Already in contacts.',
       emailRequired: 'Please enter a valid email address.',
       saved: 'Saved.',
       selectContact: 'Compose to this address',
@@ -447,6 +455,10 @@ window.__ModuleLoader__.load({
       '.dsh-mail-detailhead { padding:20px 4px 14px; border-bottom:1px solid var(--dsw-alias-border-l1); margin-bottom:16px; }',
       '.dsh-mail-detailtitle { margin:0 0 12px; font-size:20px; font-weight:650; line-height:1.4; }',
       '.dsh-mail-detailfrom { display:flex; align-items:center; gap:10px; }',
+      '.dsh-mail-detailfrom > div:nth-child(2) { flex:1; min-width:0; }',
+      // A sender already in the address book keeps the button as a quiet state
+      // marker instead of an action that would overwrite the saved name.
+      '.dsh-mail-btn.is-done { color:var(--dsw-alias-state-success-primary); border-color:var(--dsw-alias-state-success-primary); }',
       '.dsh-mail-detailmeta { font-size:11.5px; color:var(--dsw-alias-label-secondary); margin-top:2px; }',
       '.dsh-mail-mailbody { width:100%; padding:18px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }',
 
@@ -939,6 +951,18 @@ window.__ModuleLoader__.load({
       const at = v.indexOf('@');
       return at > 0 ? v.slice(0, at) : v;
     }
+    // Split a raw address header ("李文" <li@x.com>, "b@y.com") into the parts a
+    // contact needs. Accepts the first address only, which is what a sender or a
+    // single recipient field carries in practice.
+    function parseAddress(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return null;
+      const angled = s.match(/^(.*?)<([^<>]+)>/);
+      const name = angled ? String(angled[1] || '').trim().replace(/^["']|["']$/g, '').trim() : '';
+      const email = String(angled ? angled[2] : s).trim().replace(/^["']|["']$/g, '');
+      if (!email || email.indexOf('@') < 1) return null;
+      return { name, email: email.toLowerCase() };
+    }
     function fmtDate(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -1367,6 +1391,40 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // Turn a raw address header ("李文" <li@x.com>) into a contact without
+      // leaving the mail. An entry that already exists is reported instead of
+      // being duplicated, since saveContact would otherwise just overwrite it.
+      function contactKnown(email) {
+        const key = String(email || '').toLowerCase();
+        if (!key) return false;
+        return (contacts || []).some(c => String(c.email || '').toLowerCase() === key);
+      }
+
+      async function addAsContact(raw) {
+        const parsed = parseAddress(raw);
+        if (!parsed) {
+          notify('error', t('emailRequired'));
+          return false;
+        }
+        if (!activeId) return false;
+        if (contactKnown(parsed.email)) {
+          notify('info', t('contactExists'));
+          return false;
+        }
+        setBusy(true);
+        try {
+          const data = await rpc('saveContact', { id: activeId, email: parsed.email, name: parsed.name });
+          if (Array.isArray(data.contacts)) setContacts(data.contacts);
+          notify('success', t('contactAdded'));
+          return true;
+        } catch (e) {
+          reportError(e);
+          return false;
+        } finally {
+          setBusy(false);
+        }
+      }
+
       async function saveContact() {
         const email = String(contactForm.email || '').trim();
         if (!email || !email.includes('@')) {
@@ -1553,7 +1611,18 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'dsh-mail-scroll' },
               h('button', { className: 'dsh-mail-btn', onClick: () => setSentDetail(null) }, h(Ico, { name: 'back', size: 15 }), t('back')),
               h('div', { className: 'dsh-mail-detailhead' },
-                h('h2', { className: 'dsh-mail-detailtitle' }, sentDetail.subject || t('noSubject')),
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                  h('h2', { className: 'dsh-mail-detailtitle' }, sentDetail.subject || t('noSubject')),
+                  parseAddress(sentDetail.to)
+                    ? h('button', {
+                        className: 'dsh-mail-btn' + (contactKnown(parseAddress(sentDetail.to).email) ? ' is-done' : ''),
+                        'data-testid': 'add-recipient',
+                        onClick: () => addAsContact(sentDetail.to),
+                        disabled: busy,
+                        title: t('addRecipient'),
+                      }, h(Ico, { name: contactKnown(parseAddress(sentDetail.to).email) ? 'check' : 'plus', size: 14 }), t('addRecipient'))
+                    : null
+                ),
                 h('div', { className: 'dsh-mail-detailmeta' }, t('to') + ': ' + (sentDetail.to || '') + ' · ' + fmtDate(sentDetail.date))
               ),
               h('div', { className: 'dsh-mail-mailbody', style: { whiteSpace: 'pre-wrap' } }, String(sentDetail.body || '')),
@@ -1729,7 +1798,16 @@ window.__ModuleLoader__.load({
                   h('div', { style: { minWidth: 0 } },
                     h('div', { style: { fontWeight: 600 } }, String(detail.from || '').replace(/<.*>/, '').trim() || detail.from || ''),
                     h('div', { className: 'dsh-mail-detailmeta' }, t('to') + ': ' + (detail.to || '') + ' · ' + fmtDate(detail.date))
-                  )
+                  ),
+                  parseAddress(detail.from)
+                    ? h('button', {
+                        className: 'dsh-mail-btn' + (contactKnown(parseAddress(detail.from).email) ? ' is-done' : ''),
+                        'data-testid': 'add-sender',
+                        onClick: () => addAsContact(detail.from),
+                        disabled: busy,
+                        title: t('addSender'),
+                      }, h(Ico, { name: contactKnown(parseAddress(detail.from).email) ? 'check' : 'plus', size: 14 }), t('addSender'))
+                    : null
                 )
               ),
               h('div', {
