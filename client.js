@@ -606,9 +606,19 @@ window.__ModuleLoader__.load({
         return;
       }
       const delayMs = Math.max(15, NOTIFY.settings.notifyInterval || 60) * 1000;
-      NOTIFY.disposeTimer = armPoller(() => { void pollNewMail(); }, delayMs);
+      // The Cordis timer service can throw on some runtime variants (wrong
+      // signature, disposed context). Fall back to a browser timer instead of
+      // letting the exception kill the whole poller — and, when called from
+      // settings save(), falsely report the save as failed.
+      try {
+        NOTIFY.disposeTimer = armPoller(() => { void pollNewMail(); }, delayMs);
+      } catch (e) {
+        NOTIFY.diag.error = 'timer: ' + (e && e.message ? e.message : String(e));
+        const id = setInterval(() => { void pollNewMail(); }, delayMs);
+        NOTIFY.disposeTimer = () => clearInterval(id);
+      }
       NOTIFY.diag.running = true;
-      NOTIFY.diag.error = null;
+      if (!NOTIFY.diag.error) NOTIFY.diag.error = null;
       void pollNewMail(); // seed baselines on start without spamming old mail
     }
 
@@ -1364,6 +1374,7 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false);
       const [loaded, setLoaded] = useState(false);
       const [failed, setFailed] = useState(false);
+      const [saveError, setSaveError] = useState('');
       const [saved, setSaved] = useState(false);
       const [perm, setPerm] = useState(() => notifyPermission());
       const [asking, setAsking] = useState(false);
@@ -1404,6 +1415,7 @@ window.__ModuleLoader__.load({
         if (JSON.stringify(draft) !== JSON.stringify(stored) && (saved || failed)) {
           setSaved(false);
           setFailed(false);
+          setSaveError('');
         }
       }, [draft, stored]);
 
@@ -1420,6 +1432,7 @@ window.__ModuleLoader__.load({
         if (saving) return;
         setSaving(true);
         setFailed(false);
+        setSaveError('');
         setSaved(false);
         try {
           const r = await fetch(API, {
@@ -1428,11 +1441,15 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ op: 'setSettings', value: draft }),
           });
           const data = await r.json();
-          if (!r.ok || !data || data.ok === false) throw new Error('save failed');
-          // The Host normalizes values (e.g. clamps the interval to 15..3600
-          // and whitelists notifyMode). Write the applied settings back into
-          // BOTH stored and draft, otherwise dirty stays true after save and
-          // the save button never clears — which looks like a failed save.
+          // Only the HTTP result decides success. Side effects below (mirroring
+          // state, restarting the poller) must never turn a persisted save into
+          // a "failed" message — that is exactly the "saved but says failed" bug.
+          if (!r.ok || !data || data.ok === false) {
+            setFailed(true);
+            setSaveError('http:' + (r.status || '?'));
+            setSaving(false);
+            return;
+          }
           const applied = data.settings || draft;
           setStored(applied);
           setDraft(applied);
@@ -1441,9 +1458,16 @@ window.__ModuleLoader__.load({
             notifyInterval: Number(applied.notifyInterval) || 60,
             notifyMode: applied.notifyMode || 'pet',
           };
-          startPoller();
           setSaved(true);
-        } catch { setFailed(true); }
+          // Poller restart is best-effort: wrap it so an error here cannot
+          // retroactively fail the already-persisted save.
+          try { startPoller(); } catch (e) {
+            if (NOTIFY.diag) NOTIFY.diag.error = 'poller: ' + (e && e.message ? e.message : String(e));
+          }
+        } catch (e) {
+          setFailed(true);
+          setSaveError(e && e.message ? e.message : String(e));
+        }
         setSaving(false);
       };
 
@@ -1636,7 +1660,7 @@ window.__ModuleLoader__.load({
         ),
 
         failed
-          ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed'))
+          ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed') + (saveError ? ' (' + saveError + ')' : ''))
           : saved
             ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' } }, tr('settingsSaveSuccess'))
             : null,
