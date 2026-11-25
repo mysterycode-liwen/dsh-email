@@ -511,6 +511,15 @@ window.__ModuleLoader__.load({
       },
     };
 
+    // When the background poller detects new mail it publishes the affected
+    // account ids here so an open MailPanel can refresh its list in place.
+    // Module scope because detection happens outside React, in the poller.
+    const MAIL_EVENTS = {
+      listeners: new Set(),
+      subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+      emit(accountIds) { for (const fn of this.listeners) { try { fn(accountIds); } catch { /* dead listener */ } } },
+    };
+
     // A mail that arrived while DSH was restarting must not be swallowed by
     // baseline seeding. On first sight we still alert on unseen messages whose
     // Date header is within this window.
@@ -678,6 +687,7 @@ window.__ModuleLoader__.load({
     async function pollNewMail() {
       if (NOTIFY.busy) return Object.assign({}, NOTIFY.diag);
       NOTIFY.busy = true;
+      const changedAccounts = [];
       try {
         const mode = NOTIFY.settings.notifyMode || 'pet';
         if (mode === 'system' && notifyPermission() !== 'granted') {
@@ -732,6 +742,7 @@ window.__ModuleLoader__.load({
               NOTIFY.diag.alerts += 1;
               NOTIFY.diag.lastAlert = Date.now();
               BADGE.add(recent.length);
+              changedAccounts.push(acc.id);
               if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
               continue;
             }
@@ -748,6 +759,7 @@ window.__ModuleLoader__.load({
               NOTIFY.diag.alerts += 1;
               NOTIFY.diag.lastAlert = Date.now();
               BADGE.add(fresh.length);
+              changedAccounts.push(acc.id);
               if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
             }
           } catch (e) {
@@ -759,6 +771,7 @@ window.__ModuleLoader__.load({
       } finally {
         NOTIFY.busy = false;
       }
+      if (changedAccounts.length) MAIL_EVENTS.emit(changedAccounts);
       return Object.assign({}, NOTIFY.diag);
     }
 
@@ -927,9 +940,23 @@ window.__ModuleLoader__.load({
       // and remounts so we can show cached mail immediately while refreshing.
       const [cache, setCache] = usePersistent('mailCache', {});
 
+      // Keep a fresh handler so the mail-event subscription never sees stale
+      // activeId/view. New mail on the currently open account refreshes the
+      // inbox list in place (silent, no spinner/flash).
+      const onMailRef = useRef(() => {});
+      onMailRef.current = (accountIds) => {
+        if (!activeId || view !== 'inbox') return;
+        if (Array.isArray(accountIds) && accountIds.length && accountIds.indexOf(activeId) === -1) return;
+        void loadMessages(false);
+      };
+
       useEffect(() => {
         if (!PERSIST.accounts) refreshAccounts();
-        return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+        const off = MAIL_EVENTS.subscribe(ids => onMailRef.current(ids));
+        return () => {
+          off();
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        };
       }, []);
 
       function notify(kind, text) {
