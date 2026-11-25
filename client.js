@@ -120,7 +120,9 @@ window.__ModuleLoader__.load({
       settingsSaveSuccess: '设置已保存。',
       notifySectionTitle: '新邮件通知',
       notifySectionHint: '后台定时检查邮箱，收到新邮件时让桌宠气泡播报；若浏览器已授权，也会同时弹出系统通知。',
+      notifySectionHintSystem: '后台定时检查邮箱，收到新邮件时弹出系统通知（需浏览器授权）。',
       notifyEnabledLabel: '启用新邮件提醒（桌宠播报）',
+      notifyEnabledLabelSystem: '启用新邮件提醒（系统通知）',
       notifyIntervalLabel: '检查间隔（秒）',
       notifyPermission: '申请通知权限',
       notifyPermissionGranted: '通知权限已开启',
@@ -134,6 +136,8 @@ window.__ModuleLoader__.load({
       notifyBody: '封未读新邮件',
       notifyTestTitle: '邮件播报测试',
       notifyTestBody: '如果你看到桌宠说话，说明新邮件播报已正常工作。',
+      notifyTestTitleSystem: '新邮件通知测试',
+      notifyTestBodySystem: '如果你在系统通知中心看到这条消息，说明新邮件通知已正常工作。',
       notifyPetOk: '已让桌宠播报（请留意桌面桌宠）',
       notifyPetNone: '未发现可用的桌宠，仅发送了系统通知',
       notifyMode: '通知方式',
@@ -149,6 +153,7 @@ window.__ModuleLoader__.load({
       notifyDiagAccounts: '账号数',
       notifyDiagChecks: '检查次数',
       notifyDiagAlerts: '播报次数',
+      notifyDiagAlertsSystem: '通知次数',
       notifyDiagLastCheck: '上次检查',
       notifyDiagNever: '从未',
       notifyDiagError: '最近错误',
@@ -232,7 +237,9 @@ window.__ModuleLoader__.load({
       settingsSaveSuccess: 'Settings saved.',
       notifySectionTitle: 'New mail notifications',
       notifySectionHint: 'Check your mailbox in the background and have your desktop pet announce new mail in a speech bubble; a system notification is also shown when browser permission is granted.',
+      notifySectionHintSystem: 'Check your mailbox in the background and show a system notification for new mail (needs browser permission).',
       notifyEnabledLabel: 'Enable new mail alerts (pet announcement)',
+      notifyEnabledLabelSystem: 'Enable new mail alerts (system notification)',
       notifyIntervalLabel: 'Check interval (seconds)',
       notifyPermission: 'Grant notification permission',
       notifyPermissionGranted: 'Notification permission is granted',
@@ -246,6 +253,8 @@ window.__ModuleLoader__.load({
       notifyBody: 'new unread message(s)',
       notifyTestTitle: 'Mail announcement test',
       notifyTestBody: 'If your desktop pet speaks, new mail announcements are working.',
+      notifyTestTitleSystem: 'New mail notification test',
+      notifyTestBodySystem: 'If you see this message in your notification center, new mail notifications are working.',
       notifyPetOk: 'Asked your desktop pet to announce it (watch the desktop)',
       notifyPetNone: 'No desktop pet available; only a system notification was sent',
       notifyMode: 'Notification mode',
@@ -261,6 +270,7 @@ window.__ModuleLoader__.load({
       notifyDiagAccounts: 'Accounts',
       notifyDiagChecks: 'Checks',
       notifyDiagAlerts: 'Alerts',
+      notifyDiagAlertsSystem: 'Notifications',
       notifyDiagLastCheck: 'Last check',
       notifyDiagNever: 'Never',
       notifyDiagError: 'Last error',
@@ -544,7 +554,7 @@ window.__ModuleLoader__.load({
     // Deliver a new-mail alert according to the configured mode.
     // Returns a short status string used by the test button for inline feedback.
     async function deliverAlert(title, body, opts) {
-      const mode = NOTIFY.settings.notifyMode || 'pet';
+      const mode = (opts && opts.mode) || NOTIFY.settings.notifyMode || 'pet';
       let petOk = false;
       let sysOk = false;
       if (mode === 'pet' || mode === 'both') {
@@ -1460,8 +1470,13 @@ window.__ModuleLoader__.load({
             return;
           }
         }
-        const result = await deliverAlert(tr('notifyTestTitle'), tr('notifyTestBody'));
-        if (result.petOk) {
+        const systemOnly = mode === 'system';
+        const result = await deliverAlert(
+          tr(systemOnly ? 'notifyTestTitleSystem' : 'notifyTestTitle'),
+          tr(systemOnly ? 'notifyTestBodySystem' : 'notifyTestBody'),
+          { mode } // 用当前选择的方式，而不是已保存的设置
+        );
+        if (result.petOk && !systemOnly) {
           setTested(true);
           setTestMsg(tr('notifyPetOk'));
         } else if (result.sysOk) {
@@ -1503,6 +1518,8 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
       };
       const dirty = JSON.stringify(draft) !== JSON.stringify(stored);
+      // In pure system-notification mode, hide all pet-related copy.
+      const isSystemOnly = (draft.notifyMode || 'pet') === 'system';
       return h('div', { style: { padding: 4, maxWidth: 560 } },
         h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, tr('settingsTitle')),
 
@@ -1521,7 +1538,7 @@ window.__ModuleLoader__.load({
 
         // New-mail notification section.
         h('h3', { style: { margin: '24px 0 8px', fontSize: 15, lineHeight: 1.4 } }, tr('notifySectionTitle')),
-        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('notifySectionHint')),
+        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr(isSystemOnly ? 'notifySectionHintSystem' : 'notifySectionHint')),
         h('label', { htmlFor: 'settings-dsh-mail-notify', style: field },
           h('input', {
             id: 'settings-dsh-mail-notify', type: 'checkbox',
@@ -1529,7 +1546,7 @@ window.__ModuleLoader__.load({
             onChange: (e) => setDraft({ ...draft, notifyEnabled: !!(e && e.target && e.target.checked) }),
             style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
           }),
-          tr('notifyEnabledLabel')
+          tr(isSystemOnly ? 'notifyEnabledLabelSystem' : 'notifyEnabledLabel')
         ),
         h('label', { htmlFor: 'settings-dsh-mail-interval', style: { ...field, marginTop: 10 } },
           h('span', null, tr('notifyIntervalLabel')),
@@ -1609,7 +1626,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { marginTop: 6, fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } },
             tr('notifyDiagAccounts') + ': ' + (diag.accounts || 0) + '  ·  ' +
             tr('notifyDiagChecks') + ': ' + (diag.checks || 0) + '  ·  ' +
-            tr('notifyDiagAlerts') + ': ' + (diag.alerts || 0) + '  ·  ' +
+            tr(isSystemOnly ? 'notifyDiagAlertsSystem' : 'notifyDiagAlerts') + ': ' + (diag.alerts || 0) + '  ·  ' +
             tr('notifyDiagLastCheck') + ': ' + (diag.lastCheck ? new Date(diag.lastCheck).toLocaleString() : tr('notifyDiagNever'))
           ),
           h('div', { style: { marginTop: 2, fontSize: 12, lineHeight: 1.7, color: diag.error ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-success-primary)' } },
