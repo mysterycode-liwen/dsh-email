@@ -70,6 +70,10 @@ window.__ModuleLoader__.load({
       from: '发件人',
       date: '日期',
       noMessages: '没有邮件。',
+      filterAll: '全部',
+      filterUnread: '未读',
+      filterRead: '已读',
+      noFiltered: '没有符合条件的邮件。',
       loading: '加载中…',
       selectAccount: '请选择一个账号。',
       qq: 'QQ 邮箱',
@@ -188,6 +192,10 @@ window.__ModuleLoader__.load({
       from: 'From',
       date: 'Date',
       noMessages: 'No messages.',
+      filterAll: 'All',
+      filterUnread: 'Unread',
+      filterRead: 'Read',
+      noFiltered: 'No messages match this filter.',
       loading: 'Loading…',
       selectAccount: 'Select an account.',
       qq: 'QQ Mail',
@@ -322,6 +330,14 @@ window.__ModuleLoader__.load({
       '.dsh-mail-accountbar { display:flex; align-items:center; gap:9px; padding:9px 16px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
       '.dsh-mail-select { flex:1; min-width:0; max-width:320px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:6px 9px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); font-size:12px; cursor:pointer; }',
 
+      /* read/unread filter */
+      '.dsh-mail-filterbar { display:flex; align-items:center; gap:4px; padding:7px 12px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
+      '.dsh-mail-filter { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--dsw-alias-label-secondary); font-size:12px; font-weight:600; cursor:pointer; transition:background .12s,color .12s; }',
+      '.dsh-mail-filter:hover { background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-filter.is-active { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent); color:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-filtercount { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); font-size:10px; font-weight:700; }',
+      '.dsh-mail-filter.is-active .dsh-mail-filtercount { background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); }',
+
       /* message list */
       '.dsh-mail-list { flex:1; min-height:0; overflow:auto; padding:6px 8px 18px; }',
       '.dsh-mail-row { display:flex; align-items:flex-start; gap:11px; padding:12px 11px; border-radius:11px; border:1px solid transparent; cursor:pointer; transition:background .12s, border-color .12s; }',
@@ -409,6 +425,7 @@ window.__ModuleLoader__.load({
       accounts: null,
       activeId: '',
       view: 'inbox',
+      inboxFilter: 'all',
       messages: [],
       detail: null,
       form: null,
@@ -860,6 +877,7 @@ window.__ModuleLoader__.load({
       const [accounts, setAccounts] = usePersistent('accounts', null);
       const [activeId, setActiveId] = usePersistent('activeId', '');
       const [view, setView] = usePersistent('view', 'inbox');
+      const [inboxFilter, setInboxFilter] = usePersistent('inboxFilter', 'all');
       const [messages, setMessages] = usePersistent('messages', []);
       const [detail, setDetail] = usePersistent('detail', null);
       const [busy, setBusy] = useState(false);
@@ -1132,6 +1150,17 @@ window.__ModuleLoader__.load({
 
       const account = (accounts || []).find(a => a.id === activeId);
       const unread = (messages || []).filter(m => m && m.seen === false).length;
+      const readCount = (messages || []).length - unread;
+      const filters = [
+        { key: 'all', label: t('filterAll'), count: (messages || []).length },
+        { key: 'unread', label: t('filterUnread'), count: unread },
+        { key: 'read', label: t('filterRead'), count: readCount },
+      ];
+      const filteredMessages = inboxFilter === 'unread'
+        ? (messages || []).filter(m => m && m.seen === false)
+        : inboxFilter === 'read'
+          ? (messages || []).filter(m => m && m.seen !== false)
+          : (messages || []);
       const tabs = [
         { key: 'inbox', icon: 'inbox', label: t('inbox'), badge: unread },
         { key: 'sent', icon: 'sent', label: t('sent') },
@@ -1196,11 +1225,23 @@ window.__ModuleLoader__.load({
         view === 'inbox' && h('div', { className: 'dsh-mail-view' },
           !activeId
             ? h(Empty, { icon: 'user', title: t('accounts'), sub: t('noAccounts') })
+            : h('div', { className: 'dsh-mail-filterbar' }, filters.map(f =>
+                h('button', {
+                  key: f.key,
+                  className: 'dsh-mail-filter' + (inboxFilter === f.key ? ' is-active' : ''),
+                  onClick: () => setInboxFilter(f.key),
+                },
+                  f.label,
+                  h('span', { className: 'dsh-mail-filtercount' }, f.count)
+                )
+              )),
+          !activeId
+            ? null
             : (loadingMessages && messages.length === 0)
               ? h(Loading)
-              : (messages.length === 0)
-                ? h(Empty, { icon: 'inbox', title: t('inbox'), sub: t('noMessages') })
-                : h('div', { className: 'dsh-mail-list' }, messages.map(m =>
+              : (filteredMessages.length === 0)
+                ? h(Empty, { icon: 'inbox', title: t('inbox'), sub: inboxFilter === 'all' ? t('noMessages') : t('noFiltered') })
+                : h('div', { className: 'dsh-mail-list' }, filteredMessages.map(m =>
                   h('div', {
                     key: m.uid,
                     className: 'dsh-mail-row' + (m.seen === false ? ' is-unread' : ' dsh-mail-read'),
