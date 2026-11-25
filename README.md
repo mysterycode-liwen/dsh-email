@@ -25,18 +25,16 @@ A sidebar plugin for DeepSeek Harness that sends and receives mail from QQ / 163
 
 ## 安装 / Install
 
-> 📌 本文档描述的是 `main` 分支的功能。npm 上最新的 `1.0.1` 早于**附件收发**、**新邮件自动刷新**、**账号重命名**与**「加为联系人」**等改动；想用最新版请从 GitHub 源码安装。
-
-从 GitHub 源码安装（最新功能）：
-
-```bash
-dsh plugin --profile desktop add github:mysterycode-liwen/dsh-email
-```
-
-从 npm 安装（稳定版 1.0.1）：
+从 npm 安装（推荐）：
 
 ```bash
 dsh plugin --profile desktop add @mysterycode-liwen/dsh-mail
+```
+
+从 GitHub 源码安装（跟踪 `main` 的最新改动）：
+
+```bash
+dsh plugin --profile desktop add github:mysterycode-liwen/dsh-email
 ```
 
 也可以在本仓库的插件索引中一键安装：在「设置 → 插件」中启用「自定义插件索引」，然后在「发现」标签添加索引源
@@ -199,6 +197,22 @@ dsh plugin --profile desktop add link:$(pwd)
 ```
 
 发布前 `prepublishOnly` 会自动跑 `npm run check`。
+
+## 更新日志 / Changelog
+
+**1.1.0**
+
+- 新增：附件收发（写信可添加 / 拖入附件，收信可下载附件，单封上限 25 MB，中文文件名正常）。
+- 新增：新邮件被检测到后，当前账号的邮件列表自动刷新。
+- 新增：侧边栏「邮件」入口的未读小红点，点开邮件后清除。
+- 新增：账号重命名（取代此前从邮件头猜昵称的做法），新账号默认用邮箱前缀作为名称。
+- 新增：在读信与发件详情中一键把发件人 / 收件人加为联系人。
+- 改进：Host 半过期时提示「请完全退出并重启 DeepSeek Harness」，而不是抛出 `unknown op`。
+
+**1.0.1**
+
+- 新邮件通知（桌宠播报 / 系统通知 / 两者），带检测状态面板与「立即检查」「发送测试通知」。
+- 收件箱已读 / 未读筛选，刷新按钮加载动效，设置保存提示修复。
 
 ## 许可 / License
 
