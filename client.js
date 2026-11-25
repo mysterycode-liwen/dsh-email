@@ -774,15 +774,15 @@ window.__ModuleLoader__.load({
     // Solid envelope for the sidebar panel icon. The sidebar owns the button
     // ([panelGlyph(our icon)] [panelTitle(label text)]); the label is a plain
     // string also used for aria-label, so we cannot inject a React node there.
-    // Instead we mount the unread badge imperatively as the LAST child of the
+    // Instead we mount a small unread dot imperatively as the LAST child of the
     // button, which renders it AFTER the label text in the expanded state (and
-    // beside the icon when the sidebar is collapsed and has no text).
+    // beside the icon when the sidebar is collapsed and has no text). A quiet
+    // dot (no number) is the least intrusive unread cue and ages well.
     const BADGE_STYLE = {
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      height: 15, minWidth: 15, padding: '0 4px', borderRadius: 8,
-      background: 'var(--dsw-alias-state-error-primary)', color: 'var(--dsw-alias-bg-base)',
-      fontSize: 10, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
-      whiteSpace: 'nowrap', flex: 'none', marginLeft: 2,
+      display: 'block', width: '7px', height: '7px', borderRadius: '50%',
+      background: 'var(--dsw-alias-state-error-primary)',
+      flex: 'none', alignSelf: 'center', marginLeft: '4px',
+      boxShadow: '0 0 0 2px var(--dsw-alias-bg-base)',
     };
     function Icon(props) {
       const size = (props && props.size) || 20;
@@ -802,7 +802,6 @@ window.__ModuleLoader__.load({
         // elements that renderSlot/renderFactorySlot may insert.
         const button = root && root.closest && root.closest('button');
         if (!button) return;
-        const label = count > 99 ? '99+' : String(count);
         if (!count) {
           if (badgeRef.current && badgeRef.current.parentNode) badgeRef.current.parentNode.removeChild(badgeRef.current);
           badgeRef.current = null;
@@ -817,7 +816,8 @@ window.__ModuleLoader__.load({
           button.appendChild(badge);
           badgeRef.current = badge;
         }
-        badge.textContent = label;
+        // Keep the count as accessible metadata (tooltip) but render only a dot.
+        badge.title = t('badgeTitle') + ' (' + count + ')';
       });
       return h('span', { ref: rootRef, style: { display: 'inline-flex', alignItems: 'center', lineHeight: 0 } },
         h('svg', { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': true, style: { display: 'block' } },
