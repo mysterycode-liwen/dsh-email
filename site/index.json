@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Liven's DSH plugins",
+    "zh": "Liven 的 DSH 插件"
+  },
+  "description": {
+    "en": "Plugins for DeepSeek Harness by mysterycode-liwen.",
+    "zh": "mysterycode-liwen 的 DeepSeek Harness 插件。"
+  },
+  "plugins": [
+    {
+      "name": "@mysterycode-liwen/dsh-mail",
+      "title": {
+        "en": "Mail",
+        "zh": "邮件"
+      },
+      "description": {
+        "en": "Sidebar email client for QQ, 163, Gmail and other IMAP/SMTP accounts. New-mail alerts via desktop pet or system notification, unread badge, read/unread filter, and credentials stored locally in the DSH vault.",
+        "zh": "侧边栏邮件客户端，支持 QQ、163、Gmail 等 IMAP/SMTP 邮箱。新邮件由桌宠或系统通知提醒，带未读标识与已读/未读筛选，授权码保存在本机凭据保险箱。"
+      },
+      "icon": "icon.svg",
+      "author": "李文 (mysterycode-liwen)",
+      "homepage": "https://github.com/mysterycode-liwen/dsh-email#readme",
+      "repository": {
+        "url": "https://github.com/mysterycode-liwen/dsh-email"
+      },
+      "versions": [
+        {
+          "version": "1.0.0",
+          "publishTimestamp": 1795583737,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    }
+  ]
+}
