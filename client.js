@@ -211,7 +211,7 @@ window.__ModuleLoader__.load({
       /* top bar */
       '.dsh-mail-topbar { display:flex; align-items:center; gap:12px; padding:14px 18px 13px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); }',
       '.dsh-mail-brand { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:650; letter-spacing:.2px; }',
-      '.dsh-mail-brandmark { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; background:var(--dsw-alias-brand-primary); color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.14); }',
+      '.dsh-mail-brandmark { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); box-shadow:0 2px 8px rgba(0,0,0,.14); }',
       '.dsh-mail-brandsub { font-size:11px; color:var(--dsw-alias-label-secondary); font-weight:400; }',
 
       /* buttons */
@@ -220,7 +220,7 @@ window.__ModuleLoader__.load({
       '.dsh-mail-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 5px rgba(0,0,0,.12); }',
       '.dsh-mail-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }',
       '.dsh-mail-btn:disabled { opacity:.45; cursor:not-allowed; }',
-      '.dsh-mail-btn-primary { background:var(--dsw-alias-brand-primary); border-color:transparent; color:#fff; box-shadow:0 2px 8px rgba(0,0,0,.16); }',
+      '.dsh-mail-btn-primary { background:var(--dsw-alias-brand-primary); border-color:transparent; color:var(--dsw-alias-bg-base); box-shadow:0 2px 8px rgba(0,0,0,.16); }',
       '.dsh-mail-btn-primary:hover:not(:disabled) { filter:brightness(1.08); }',
       '.dsh-mail-btn-danger { color:var(--dsw-alias-state-error-primary); border-color:var(--dsw-alias-state-error-primary); background:transparent; }',
       '.dsh-mail-btn-danger:hover:not(:disabled) { filter:none; background:var(--dsw-alias-state-error-primary); color:#fff; }',
@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
       '.dsh-mail-tab:hover { color:var(--dsw-alias-label-primary); }',
       '.dsh-mail-tab.is-active { color:var(--dsw-alias-brand-primary); }',
       '.dsh-mail-tab.is-active::after { content:""; position:absolute; left:10px; right:10px; bottom:0; height:2px; border-radius:2px 2px 0 0; background:var(--dsw-alias-brand-primary); }',
-      '.dsh-mail-badge { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-brand-primary); color:#fff; font-size:10px; font-weight:700; }',
+      '.dsh-mail-badge { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); font-size:10px; font-weight:700; }',
 
       /* account chip */
       '.dsh-mail-accountbar { display:flex; align-items:center; gap:9px; padding:9px 16px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
@@ -268,7 +268,7 @@ window.__ModuleLoader__.load({
       '.dsh-mail-pill { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--dsw-alias-border-l2); border-radius:999px; padding:5px 12px; font-size:11.5px; font-weight:600; cursor:pointer; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-secondary); transition:all .12s; }',
       '.dsh-mail-pill:hover { color:var(--dsw-alias-label-primary); border-color:var(--dsw-alias-brand-primary); }',
       '.dsh-mail-pill:active { transform:translateY(1px); }',
-      '.dsh-mail-pill.is-active { background:var(--dsw-alias-brand-primary); border-color:transparent; color:#fff; }',
+      '.dsh-mail-pill.is-active { background:var(--dsw-alias-brand-primary); border-color:transparent; color:var(--dsw-alias-bg-base); }',
 
       /* flash */
       '.dsh-mail-flash { display:flex; align-items:flex-start; gap:8px; margin:12px 16px 0; padding:10px 12px; border-radius:9px; font-size:12px; line-height:1.55; white-space:pre-wrap; }',
