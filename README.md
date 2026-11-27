@@ -15,6 +15,7 @@ A sidebar plugin for DeepSeek Harness that sends and receives mail from QQ / 163
 - [快速上手](#快速上手--quick-start)
 - [功能](#功能--features)
 - [新邮件通知](#新邮件通知--new-mail-alerts)
+- [邮件翻译](#邮件翻译--mail-translation)
 - [AI 助手查询邮箱（需开启）](#ai-助手查询邮箱需开启--ai-assistant-mail-query)
 - [支持的邮箱与服务器](#支持的邮箱与服务器--server-presets)
 - [工作原理](#工作原理--how-it-works)
@@ -83,6 +84,7 @@ dsh plugin --profile desktop add link:E:/DeepSeek/dsh-email
 **读信**
 
 - 正文支持富文本——保留可点击链接与内嵌图片；HTML 经消毒（剥离脚本、样式、危险属性与 `javascript:` 链接），`cid:` 内嵌图片转成 `data:` URI 显示。
+- **翻译邮件**：读信页点「翻译」即可把正文译成中文，再点「查看原文」切回；译文不写入本地存储。复用 DSH 内置翻译服务（默认 Bing，免登录 / 免 API Key / 无额外费用），超长正文自动分段翻译后拼回。
 - 附件：显示文件名 / 大小，点「下载」按需取回并保存到本地下载目录；单封邮件附件上限 25 MB。
 - 一键把发件人加为联系人（已在联系人中的显示为已完成态，不会覆盖你改过的姓名）。
 
@@ -119,6 +121,14 @@ dsh plugin --profile desktop add link:E:/DeepSeek/dsh-email
 
 桌宠播报不需要浏览器通知权限，走的是桌宠插件的同源广播接口（`/dsh-pet-7340/broadcast`），桌宠睡着时会被拒绝。系统通知需要浏览器授权，首次点按钮时申请。
 
+## 邮件翻译 / Mail translation
+
+读信页正文上方有「翻译」按钮，点一下把邮件正文译成中文并显示「译文」卡片，再点「查看原文」切回。翻译复用 DSH 内置的 `translator` 服务（默认 Bing 提供方，免登录、免 API Key、无额外费用）；邮件正文超过单次 4000 字符上限时会按行自动分段翻译后拼回。
+
+该服务来自实验性扩展包 `@deepseek-ai/dsh-experimental-cot-translation-bundle`，**不是默认开启的**。如果点翻译提示「当前环境未启用翻译服务」，请在「设置 → 插件」中启用该扩展包后重试。译文只做机器翻译，仅供参考；译文不会写入本地缓存或 profile 存储。
+
+The detail view has a "Translate" button that translates the message body into Chinese and shows a "Translation" card; "Show original" switches back. Translation uses DSH's built-in `translator` service (Bing by default — no login, no API key, no extra cost), automatically splitting long bodies into chunks. The service comes from the opt-in experimental bundle `@deepseek-ai/dsh-experimental-cot-translation-bundle`; if it reports "translation service unavailable", enable that bundle under Settings → Plugins. Translations are machine-generated and are never persisted.
+
 ## AI 助手查询邮箱（需开启）/ AI assistant mail query
 
 插件提供只读工具 `mail_query`，让 DeepSeek Harness 的 AI 助手方便查询邮箱内容（列出账号 / 列出邮件 / 读某封邮件 / 最近已发送）。出于隐私，**默认关闭**：必须先在「设置 → 插件 → dsh-mail」中打开「允许 AI 助手查询邮箱内容」开关，助手才能拿到邮件；关闭时工具直接返回“未开启”，不会访问邮箱。
@@ -146,7 +156,7 @@ The read-only `mail_query` tool lets the DSH AI assistant query mail (list accou
 - 每次操作启动一个 Python 子进程运行 `bridge.py`，通过环境变量 `MAIL_REQUEST` 传 JSON 请求、stdout 读 JSON 结果；
 - `bridge.py` 用标准库实现 `test` / `listMessages` / `getMessage` / `getAttachment` / `sendMessage` / `listSent` 等操作；正文解码处理 charset 回退（UTF-8 / GB18030 / GBK / Big5 / Shift-JIS / EUC-KR）以消除中文乱码，附件按 RFC 2231 编码以保留中文文件名。
 
-Host 端操作一览：`getSettings` / `setSettings` / `listAccounts` / `saveAccount` / `renameAccount` / `deleteAccount` / `testAccount` / `listMessages` / `getMessage` / `getAttachment` / `sendMessage` / `sentMessages` / `listContacts` / `saveContact` / `deleteContact`。
+Host 端操作一览：`getSettings` / `setSettings` / `listAccounts` / `saveAccount` / `renameAccount` / `deleteAccount` / `testAccount` / `listMessages` / `getMessage` / `getAttachment` / `sendMessage` / `sentMessages` / `listContacts` / `saveContact` / `deleteContact` / `translate`（后者走 DSH `ctx.translator` 可选服务，不属于 Python bridge）。
 
 联系人、发件箱缓存、设置都存在本机的 profile 存储里，不经过邮箱服务器（联系人不会同步到服务器通讯录）。
 
@@ -199,6 +209,10 @@ dsh plugin --profile desktop add link:$(pwd)
 发布前 `prepublishOnly` 会自动跑 `npm run check`。
 
 ## 更新日志 / Changelog
+
+**1.2.0**
+
+- 新增：邮件翻译——读信页一键把正文译成中文（复用 DSH 内置翻译服务，免登录 / 免 API Key，超长正文自动分段），可随时切回原文。
 
 **1.1.0**
 

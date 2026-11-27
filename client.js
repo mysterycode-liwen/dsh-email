@@ -13,6 +13,23 @@ window.__ModuleLoader__.load({
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // Best-effort plain-text extraction from a sanitized mail body, used as the
+    // translation source when the bridge did not supply a plain-text part.
+    function htmlToText(html) {
+      return String(html == null ? '' : html)
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|tr|h[1-6]|blockquote)>/gi, '\n')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
     let t = (key) => key;
 
     // Map a structured bridge error ({ code, error, stage }) to a short,
@@ -187,6 +204,15 @@ window.__ModuleLoader__.load({
       notifyDiagNever: '从未',
       notifyDiagError: '最近错误',
       notifyDiagOk: '正常',
+      // 邮件翻译
+      translate: '翻译',
+      translating: '翻译中…',
+      translated: '译文',
+      translateShowOriginal: '查看原文',
+      translatedNotice: '由 DSH 翻译（机器翻译，仅供参考）',
+      translateFailed: '翻译失败：',
+      translateUnavailable: '当前环境未启用翻译服务。请在「设置 → 插件」中启用实验性翻译扩展后重试。',
+      translateTextLimit: '邮件内容过长，翻译失败。',
     };
     const en = {
       label: 'Mail',
@@ -329,6 +355,15 @@ window.__ModuleLoader__.load({
       notifyDiagNever: 'Never',
       notifyDiagError: 'Last error',
       notifyDiagOk: 'OK',
+      // Mail translation
+      translate: 'Translate',
+      translating: 'Translating…',
+      translated: 'Translation',
+      translateShowOriginal: 'Show original',
+      translatedNotice: 'Translated by DSH (machine translation, for reference only)',
+      translateFailed: 'Translation failed: ',
+      translateUnavailable: 'Translation is not enabled in this environment. Enable the experimental translation extension under Settings → Plugins and retry.',
+      translateTextLimit: 'This message is too long to translate.',
     };
 
     // ---------------------------------------------------------------------
@@ -460,7 +495,10 @@ window.__ModuleLoader__.load({
       // marker instead of an action that would overwrite the saved name.
       '.dsh-mail-btn.is-done { color:var(--dsw-alias-state-success-primary); border-color:var(--dsw-alias-state-success-primary); }',
       '.dsh-mail-detailmeta { font-size:11.5px; color:var(--dsw-alias-label-secondary); margin-top:2px; }',
+      '.dsh-mail-detailtoolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px; }',
       '.dsh-mail-mailbody { width:100%; padding:18px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }',
+      '.dsh-mail-translated { border-color:var(--dsw-alias-brand-primary); background:color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, var(--dsw-alias-bg-layer-1)); }',
+      '.dsh-mail-translatednotice { display:flex; align-items:center; gap:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px dashed var(--dsw-alias-border-l2); font-size:11px; color:var(--dsw-alias-label-secondary); }',
 
       // Third-party HTML: force theme colors so hardcoded mail colors (usually
       // white bg / dark text) never clash with the dark theme. Buttons and links
@@ -919,6 +957,7 @@ window.__ModuleLoader__.load({
       plus: 'M12 5v14M5 12h14',
       attach: 'M20 11.5l-8.2 8.2a4.5 4.5 0 0 1-6.4-6.4l8.5-8.5a3 3 0 0 1 4.3 4.3l-8.5 8.5a1.5 1.5 0 0 1-2.2-2.2l7.8-7.8',
       download: 'M12 4v11m0 0l-4-4m4 4l4-4M4 19h16',
+      translate: 'M12.9 15L8 20l-4-5h3.1a7 7 0 0 0 1.4-4H4v-2h5.1A11 11 0 0 0 11 3h2c-.6 1.7-1.5 3.2-2.7 4.5A9 9 0 0 1 17 11h2.9l-4.3 4.3m-2-2.3c-.6-2.2-2-4-3.9-5.3A9 9 0 0 1 18 9',
     };
     function Ico(props) {
       // Rendered as a React component via h(Ico, { name, size }); the first
@@ -1040,6 +1079,10 @@ window.__ModuleLoader__.load({
       const [inboxFilter, setInboxFilter] = usePersistent('inboxFilter', 'all');
       const [messages, setMessages] = usePersistent('messages', []);
       const [detail, setDetail] = usePersistent('detail', null);
+      // Translated body for the currently open message. Kept out of PERSIST:
+      // translations are disposable and never written to profile storage.
+      const [translatedText, setTranslatedText] = useState(null);
+      const [translating, setTranslating] = useState(false);
       const [busy, setBusy] = useState(false);
       const [loadingMessages, setLoadingMessages] = useState(false);
       const [loadingSent, setLoadingSent] = useState(false);
@@ -1314,11 +1357,42 @@ window.__ModuleLoader__.load({
           const data = await rpc('getMessage', { id: activeId, uid });
           const full = data.message || data;
           setDetail(Object.assign({}, full, { seen: true }));
+          setTranslatedText(null);
           setView('detail');
         } catch (e) {
           reportError(e);
         } finally {
           setBusy(false);
+        }
+      }
+
+      // Translate the currently open message through the Host's `translate`
+      // op. Prefer the plain-text part; fall back to stripping tags from the
+      // sanitized HTML when the mail is HTML-only.
+      async function translateMessage() {
+        if (!detail || translating) return;
+        const source = typeof detail.body === 'string' && detail.body.trim()
+          ? detail.body
+          : htmlToText(detail.html);
+        if (!source.trim()) {
+          notify('error', t('translateFailed') + t('errGeneric'));
+          return;
+        }
+        setTranslating(true);
+        try {
+          const data = await rpc('translate', { text: source, targetLanguage: 'zh-CN' });
+          setTranslatedText(String(data.text || ''));
+        } catch (e) {
+          const code = e && e.info && e.info.code;
+          if (code === 'TRANSLATION_UNAVAILABLE') {
+            notify('error', t('translateUnavailable'));
+          } else if (code === 'TRANSLATION_TEXT_LIMIT') {
+            notify('error', t('translateTextLimit'));
+          } else {
+            notify('error', t('translateFailed') + (e && e.message ? e.message : t('errGeneric')));
+          }
+        } finally {
+          setTranslating(false);
         }
       }
 
@@ -1810,18 +1884,57 @@ window.__ModuleLoader__.load({
                     : null
                 )
               ),
-              h('div', {
-                className: 'dsh-mail-mailbody',
-                onClick: (e) => {
-                  const a = e.target && e.target.closest && e.target.closest('a[href]');
-                  if (!a) return;
-                  const href = a.getAttribute('href');
-                  if (!href) return;
-                  e.preventDefault();
-                  if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
+              h('div', { className: 'dsh-mail-detailtoolbar' },
+                h('button', {
+                  className: 'dsh-mail-btn',
+                  type: 'button',
+                  'data-testid': 'translate-mail',
+                  onClick: () => void translateMessage(),
+                  disabled: translating || busy,
+                  title: t('translate'),
                 },
-                dangerouslySetInnerHTML: { __html: detail.html || ('<div style="white-space:pre-wrap">' + escHtml(detail.body || '') + '</div>') },
-              }),
+                  h(Ico, { name: 'translate', size: 14 }),
+                  translating ? t('translating') : t('translate')
+                ),
+                translatedText !== null
+                  ? h('button', {
+                      className: 'dsh-mail-btn',
+                      type: 'button',
+                      onClick: () => setTranslatedText(null),
+                      title: t('translateShowOriginal'),
+                    }, h(Ico, { name: 'back', size: 14 }), t('translateShowOriginal'))
+                  : null
+              ),
+              translatedText !== null
+                ? h('div', null,
+                    h('div', {
+                      className: 'dsh-mail-mailbody dsh-mail-translated',
+                      onClick: (e) => {
+                        const a = e.target && e.target.closest && e.target.closest('a[href]');
+                        if (!a) return;
+                        const href = a.getAttribute('href');
+                        if (!href) return;
+                        e.preventDefault();
+                        if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
+                      },
+                    },
+                      h('div', { className: 'dsh-mail-translatednotice' }, h(Ico, { name: 'translate', size: 13 }), t('translatedNotice')),
+                      h('div', { style: { whiteSpace: 'pre-wrap' } }, translatedText || t('noMessages'))
+                    ),
+                    h('div', { style: { height: 14 } })
+                  )
+                : h('div', {
+                    className: 'dsh-mail-mailbody',
+                    onClick: (e) => {
+                      const a = e.target && e.target.closest && e.target.closest('a[href]');
+                      if (!a) return;
+                      const href = a.getAttribute('href');
+                      if (!href) return;
+                      e.preventDefault();
+                      if (window.open) window.open(href, '_blank', 'noopener,noreferrer');
+                    },
+                    dangerouslySetInnerHTML: { __html: detail.html || ('<div style="white-space:pre-wrap">' + escHtml(detail.body || '') + '</div>') },
+                  }),
               // Attachments are fetched on demand so opening a mail stays fast.
               Array.isArray(detail.attachments) && detail.attachments.length > 0
                 ? h('div', { className: 'dsh-mail-field', style: { marginTop: 14 } },

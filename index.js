@@ -176,6 +176,85 @@ function json(result, status = 200) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Mail translation.
+//
+// Translation reuses DSH's built-in `translator` service. That service comes
+// from an opt-in experimental bundle, so it is NOT declared in `inject` (a
+// hard dependency would leave the whole plugin PENDING on machines where the
+// bundle is off). We probe it lazily and degrade to a clear error instead.
+// Bing is the default provider — no login, no API key, no extra cost.
+//
+// The service caps a single request at 4000 UTF-16 code units. Mail bodies are
+// routinely longer, so we split on line boundaries (keeping the newlines) and
+// translate chunk by chunk, then stitch the translated chunks back together.
+// ---------------------------------------------------------------------------
+const TRANSLATION_CHUNK_CHARS = 3500; // headroom below the service's 4000 limit
+
+function splitForTranslation(text, maxChars) {
+  if (text.length <= maxChars) return [text];
+  const chunks = [];
+  let current = '';
+  // Keep each line's trailing newline attached so joins restore the exact
+  // original line structure instead of collapsing blank lines.
+  const segments = text.split(/(?<=\n)/);
+  for (const segment of segments) {
+    if (!segment) continue;
+    if (segment.length > maxChars) {
+      // One very long line: hard-split it into code-unit-sized pieces.
+      if (current) { chunks.push(current); current = ''; }
+      for (let i = 0; i < segment.length; i += maxChars) {
+        chunks.push(segment.slice(i, i + maxChars));
+      }
+      continue;
+    }
+    if (current && current.length + segment.length > maxChars) {
+      chunks.push(current);
+      current = segment;
+    } else {
+      current += segment;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function getTranslator(ctx) {
+  // Optional service: NEVER declare `translator` in `inject` (that would hold
+  // this plugin PENDING whenever the experimental bundle is off), and NEVER
+  // read `ctx.translator` here — the Context proxy throws
+  // `cannot get property "translator" without inject` when it is not injected.
+  // ctx.get() reads without the inject requirement; the false-strict retry
+  // also finds a provider whose fiber is not currently ACTIVE.
+  if (typeof ctx.get !== 'function') return undefined;
+  try {
+    return ctx.get('translator') ?? ctx.get('translator', false);
+  } catch {
+    return undefined;
+  }
+}
+
+async function translateMailText(ctx, text, targetLanguage, signal) {
+  const translator = getTranslator(ctx);
+  if (!translator || typeof translator.translate !== 'function') {
+    const error = new Error('translation service unavailable');
+    error.code = 'TRANSLATION_UNAVAILABLE';
+    throw error;
+  }
+  const chunks = splitForTranslation(text, TRANSLATION_CHUNK_CHARS);
+  const results = [];
+  for (const chunk of chunks) {
+    if (!chunk) { results.push(''); continue; }
+    const spec = translator.resolve({
+      text: chunk,
+      targetLanguage,
+      sourceLanguage: 'auto',
+    });
+    results.push(await translator.translate(spec, signal));
+  }
+  return results.join('');
+}
+
 async function handleRequest(ctx, request) {
   const url = new URL(request.url);
   let body = {};
@@ -369,6 +448,28 @@ async function handleRequest(ctx, request) {
           .filter(c => String(c.email || '').toLowerCase() !== email);
         await writeData(ctx, contactsKey(id), { contacts: list });
         return json({ ok: true, contacts: list });
+      }
+      case 'translate': {
+        const text = typeof body.text === 'string' ? body.text : '';
+        if (!text.trim()) {
+          return json({ ok: false, error: 'text is required' }, 400);
+        }
+        const targetLanguage =
+          typeof body.targetLanguage === 'string' && body.targetLanguage.trim()
+            ? body.targetLanguage.trim()
+            : 'zh-CN';
+        try {
+          const translated = await translateMailText(ctx, text, targetLanguage, request.signal);
+          return json({ ok: true, text: translated });
+        } catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+          const status = code === 'TRANSLATION_UNAVAILABLE' ? 503 : 502;
+          return json({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            ...(code ? { code } : {}),
+          }, status);
+        }
       }
       default:
         return json({ ok: false, error: 'unknown op: ' + op }, 400);
