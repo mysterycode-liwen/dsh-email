@@ -7,6 +7,172 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-mail';
     const API = '/api/dsh-mail';
+    // ---- Credential-vault bridge client (self-contained, zero deps) ----
+    // Enables "fill from vault" only when the credential-vault plugin is installed.
+    // Uninstalled -> isAvailable() false -> the feature silently hides.
+    /*
+     * vault-bridge-client.js — reusable client module for the DSH credential vault bridge
+     * ------------------------------------------------------------------------------
+     * Copy this whole file's contents into your plugin's client.js (inside
+     * factory(require)), or load it through your plugin's build step. ZERO deps:
+     * it only uses window.crypto.subtle, btoa/atob and TextEncoder/TextDecoder.
+     *
+     * WHY THIS EXISTS
+     *   The vault keeps real secrets in its own browser localStorage. The Harness
+     *   Host process only ever sees metadata (secrets are masked), so a plugin that
+     *   needs a real value (e.g. a mail app password) must talk to the vault's
+     *   browser-side bridge. This module does that.
+     *
+     *   All payloads are encrypted with an ECDH (P-256) + AES-GCM session:
+     *     1. client.query(...)  -> bridge.hello() = vault ephemeral public key + id
+     *     2. client generates its own ephemeral key pair, derives the shared AES key
+     *     3. client seals the query, vault decrypts / reads secrets / seals result
+     *     4. client opens the result with the same derived key.
+     *   No plaintext and no long-lived key ever crosses the bridge. If the vault is
+     *   not installed, isAvailable() is false and query() rejects NOT_INSTALLED —
+     *   gate your UI on isAvailable() so the feature silently disappears.
+     *
+     * SECURITY NOTE
+     *   The bridge is a same-document JS object. ECDH stops passive observers and
+     *   other plugins from reading the payload, but a hostile script in the same
+     *   document could still call the bridge as if it were your plugin. The vault
+     *   never auto-authorises: each session is one-time use and expires in 60s.
+     *
+     * USAGE
+     *   const vault = createVaultV1Client();
+     *   if (vault.isAvailable()) {
+     *     const entries = await vault.query({ category: 'account', title: 'qq' });
+     *     const secret = vault.secretOf(entries[0]);  // real password / key value
+     *   }
+     *
+     * Node (tests): also exported via module.exports when available.
+     */
+    
+    function createVaultV1Client(options) {
+      options = options || {};
+      var win = options.window || (typeof window !== 'undefined' ? window : null);
+      var BRIDGE_KEY = '@mysterycode-liwen/dsh-credential-vault/bridge/v1';
+    
+      function cryptoObj() {
+        return (win && win.crypto) || (typeof globalThis !== 'undefined' && globalThis.crypto) || null;
+      }
+      function subtle() {
+        var c = cryptoObj();
+        return c && c.subtle ? c.subtle : null;
+      }
+      function randomFill(bytes) {
+        var c = cryptoObj();
+        if (!c || !c.getRandomValues) throw new Error('NO_CRYPTO');
+        c.getRandomValues(bytes);
+        return bytes;
+      }
+      function toB64u(bytes) {
+        var s = '';
+        for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        var btoaFn = options.btoa || (typeof btoa === 'function' ? btoa : (win && win.btoa));
+        return btoaFn(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      }
+      function fromB64u(str) {
+        var s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        var atobFn = options.atob || (typeof atob === 'function' ? atob : (win && win.atob));
+        var bin = atobFn(s), out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+      }
+      function enc(str) { return new TextEncoder().encode(str); }
+      function dec(bytes) { return new TextDecoder().decode(bytes); }
+    
+      function bridge() {
+        if (!win || !win[BRIDGE_KEY]) return null;
+        var b = win[BRIDGE_KEY];
+        return b && b.version === 1 && typeof b.hello === 'function' && typeof b.query === 'function' ? b : null;
+      }
+    
+      function generatePair(s) {
+        return s.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+      }
+      function deriveKey(s, priv, peerJwk) {
+        return s.importKey('jwk', peerJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, [])
+          .then(function (pub) { return s.deriveBits({ name: 'ECDH', public: pub }, priv, 256); })
+          .then(function (bits) { return s.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']); });
+      }
+      function seal(s, key, obj) {
+        var iv = randomFill(new Uint8Array(12));
+        return s.encrypt({ name: 'AES-GCM', iv: iv }, key, enc(JSON.stringify(obj)))
+          .then(function (ct) { return { iv: toB64u(iv), ciphertext: toB64u(new Uint8Array(ct)) }; });
+      }
+      function open(s, key, payload) {
+        if (!payload || typeof payload.iv !== 'string' || typeof payload.ciphertext !== 'string') {
+          return Promise.reject(new Error('BAD_CIPHERTEXT'));
+        }
+        return s.decrypt({ name: 'AES-GCM', iv: fromB64u(payload.iv) }, key, fromB64u(payload.ciphertext))
+          .then(function (plain) { return JSON.parse(dec(new Uint8Array(plain))); });
+      }
+    
+      function isAvailable() { return !!bridge(); }
+    
+      function query(criteria) {
+        criteria = criteria || {};
+        var b = bridge();
+        if (!b) return Promise.reject(new Error('NOT_INSTALLED'));
+        var s = subtle();
+        if (!s) return Promise.reject(new Error('NO_CRYPTO'));
+        var vaultPub, sessionId, priv, aes;
+        return Promise.resolve(b.hello())
+          .then(function (hello) {
+            if (!hello || !hello.sessionId || !hello.publicKeyJwk) throw new Error('BAD_HELLO');
+            sessionId = hello.sessionId;
+            vaultPub = hello.publicKeyJwk;
+            return generatePair(s);
+          })
+          .then(function (kp) {
+            priv = kp.privateKey;
+            return s.exportKey('jwk', kp.publicKey);
+          })
+          .then(function (pubJwk) {
+            return deriveKey(s, priv, vaultPub).then(function (key) {
+              aes = key;
+              return seal(s, aes, {
+                category: criteria.category || 'all',
+                title: criteria.title || '',
+                limit: criteria.limit || 100
+              }).then(function (sealed) {
+                return b.query({
+                  sessionId: sessionId,
+                  publicKeyJwk: pubJwk,
+                  iv: sealed.iv,
+                  ciphertext: sealed.ciphertext
+                });
+              });
+            });
+          })
+          .then(function (result) {
+            if (!result) throw new Error('NO_RESPONSE');
+            if (result.error) throw new Error(result.error);
+            return open(s, aes, result);
+          })
+          .then(function (plain) { return plain && Array.isArray(plain.entries) ? plain.entries : []; });
+      }
+    
+      function secretOf(entry) {
+        if (!entry) return '';
+        var keys = ['password', 'keyValue', 'apiKey', 'content', 'appSecret', 'token', 'encodingAesKey', 'uploadKey'];
+        for (var i = 0; i < keys.length; i++) {
+          if (typeof entry[keys[i]] === 'string' && entry[keys[i]]) return entry[keys[i]];
+        }
+        return '';
+      }
+    
+      return {
+        version: 1,
+        isAvailable: isAvailable,
+        query: query,
+        secretOf: secretOf,
+        _debug: { toB64u: toB64u, fromB64u: fromB64u, deriveKey: deriveKey, seal: seal, open: open }
+      };
+    }
+
 
     function escHtml(s) {
       return String(s == null ? '' : s)
@@ -106,6 +272,13 @@ window.__ModuleLoader__.load({
       custom: '自定义',
       presets: '快速设置',
       note: 'QQ / 163 需要邮箱授权码，而不是登录密码。授权码保存在凭据保险箱中。',
+      fillFromVault: '从保险箱选择',
+      vaultUnavailable: '未安装凭据保险箱插件，或保险箱中没有账号类凭据。',
+      vaultPickTitle: '从凭据保险箱选择授权码',
+      vaultPickHint: '以下是保险箱中的账号凭据，选择一个用其密码/授权码填入。',
+      vaultPickEmpty: '保险箱中没有可用的账号凭据。',
+      vaultPickError: '读取保险箱失败，请确认保险箱插件已启用。',
+      vaultPickLoading: '正在读取…',
       confirmDelete: '确定删除此账号吗？',
       rename: '重命名',
       renameHint: '名称只在本机显示，默认用邮箱前缀。',
@@ -257,6 +430,13 @@ window.__ModuleLoader__.load({
       custom: 'Custom',
       presets: 'Presets',
       note: 'QQ / 163 need an app password, not your login password. Stored in the credential vault.',
+      fillFromVault: 'Fill from vault',
+      vaultUnavailable: 'Credential vault plugin not installed, or no account credentials in it.',
+      vaultPickTitle: 'Choose app password from vault',
+      vaultPickHint: 'These are the account credentials in your vault. Pick one to fill its password / app code.',
+      vaultPickEmpty: 'No account credentials found in the vault.',
+      vaultPickError: 'Failed to read the vault. Make sure the vault plugin is enabled.',
+      vaultPickLoading: 'Reading…',
       confirmDelete: 'Delete this account?',
       rename: 'Rename',
       renameHint: 'The name is local to this machine; it defaults to the mailbox prefix.',
@@ -374,25 +554,25 @@ window.__ModuleLoader__.load({
     // hardcoded gray buttons the previous version had.
     // ---------------------------------------------------------------------
     const CSS = [
-      '.dsh-mail { display:flex; flex-direction:column; height:100%; box-sizing:border-box; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); font-family:inherit; font-size:13px; line-height:1.5; }',
+      '.dsh-mail { display:flex; flex-direction:column; height:100%; box-sizing:border-box; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); font-family:inherit; font-size:13px; line-height:1.55; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }',
       '.dsh-mail * { box-sizing:border-box; }',
       '.dsh-mail button, .dsh-mail input, .dsh-mail textarea, .dsh-mail select { font-family:inherit; }',
       '.dsh-mail-spacer { flex:1; min-width:0; }',
 
       /* top bar */
-      '.dsh-mail-topbar { display:flex; align-items:center; gap:12px; padding:14px 18px 13px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); }',
-      '.dsh-mail-brand { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:650; letter-spacing:.2px; }',
-      '.dsh-mail-brandmark { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); box-shadow:0 2px 8px rgba(0,0,0,.14); }',
-      '.dsh-mail-brandsub { font-size:11px; color:var(--dsw-alias-label-secondary); font-weight:400; }',
+      '.dsh-mail-topbar { display:flex; align-items:center; gap:12px; padding:15px 20px 14px; border-bottom:1px solid var(--dsw-alias-border-l1); background:linear-gradient(180deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, var(--dsw-alias-bg-layer-1)), var(--dsw-alias-bg-layer-1)); }',
+      '.dsh-mail-brand { display:flex; align-items:center; gap:11px; font-size:16px; font-weight:700; letter-spacing:.3px; }',
+      '.dsh-mail-brandmark { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; background:linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 78%, white), var(--dsw-alias-brand-primary)); color:var(--dsw-alias-bg-base); box-shadow:0 4px 12px color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent), inset 0 1px 0 rgba(255,255,255,.22); }',
+      '.dsh-mail-brandsub { font-size:10.5px; color:var(--dsw-alias-label-secondary); font-weight:500; letter-spacing:.6px; text-transform:uppercase; }',
 
       /* buttons */
-      '.dsh-mail-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:7px 12px; font-size:12px; font-weight:600; line-height:1.4; cursor:pointer; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); transition:filter .12s, transform .06s, box-shadow .12s; white-space:nowrap; }',
-      '.dsh-mail-btn:hover:not(:disabled) { filter:brightness(.94); }',
+      '.dsh-mail-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px; padding:7px 13px; font-size:12px; font-weight:600; line-height:1.4; cursor:pointer; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); transition:filter .15s, transform .08s, box-shadow .15s, border-color .15s, background .15s; white-space:nowrap; }',
+      '.dsh-mail-btn:hover:not(:disabled) { filter:brightness(.97); border-color:var(--dsw-alias-brand-primary); box-shadow:0 2px 8px rgba(0,0,0,.08); }',
       '.dsh-mail-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 5px rgba(0,0,0,.12); }',
       '.dsh-mail-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }',
       '.dsh-mail-btn:disabled { opacity:.45; cursor:not-allowed; }',
-      '.dsh-mail-btn-primary { background:var(--dsw-alias-brand-primary); border-color:transparent; color:var(--dsw-alias-bg-base); box-shadow:0 2px 8px rgba(0,0,0,.16); }',
-      '.dsh-mail-btn-primary:hover:not(:disabled) { filter:brightness(1.08); }',
+      '.dsh-mail-btn-primary { background:linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 82%, white), var(--dsw-alias-brand-primary)); border-color:transparent; color:var(--dsw-alias-bg-base); box-shadow:0 3px 10px color-mix(in srgb, var(--dsw-alias-brand-primary) 32%, transparent), inset 0 1px 0 rgba(255,255,255,.2); }',
+      '.dsh-mail-btn-primary:hover:not(:disabled) { filter:brightness(1.06); box-shadow:0 5px 14px color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent); }',
       '.dsh-mail-btn-danger { color:var(--dsw-alias-state-error-primary); border-color:var(--dsw-alias-state-error-primary); background:transparent; }',
       '.dsh-mail-btn-danger:hover:not(:disabled) { filter:none; background:var(--dsw-alias-state-error-primary); color:#fff; }',
       '.dsh-mail-iconbtn { width:30px; height:30px; padding:0; border-radius:8px; }',
@@ -401,12 +581,13 @@ window.__ModuleLoader__.load({
       '.dsh-mail-refresh-err { color:var(--dsw-alias-state-error-primary); }',
 
       /* segmented navigation */
-      '.dsh-mail-tabs { display:flex; align-items:center; gap:2px; padding:0 12px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); overflow-x:auto; }',
-      '.dsh-mail-tab { position:relative; display:inline-flex; align-items:center; gap:7px; padding:11px 13px 12px; border:0; background:transparent; color:var(--dsw-alias-label-secondary); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:color .12s; }',
+      '.dsh-mail-tabs { display:flex; align-items:center; gap:4px; padding:0 14px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); overflow-x:auto; }',
+      '.dsh-mail-tab { position:relative; display:inline-flex; align-items:center; gap:7px; padding:12px 14px 13px; border:0; background:transparent; color:var(--dsw-alias-label-secondary); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:color .15s, transform .08s; }',
       '.dsh-mail-tab:hover { color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-tab:active { transform:scale(.96); }',
       '.dsh-mail-tab.is-active { color:var(--dsw-alias-brand-primary); }',
-      '.dsh-mail-tab.is-active::after { content:""; position:absolute; left:10px; right:10px; bottom:0; height:2px; border-radius:2px 2px 0 0; background:var(--dsw-alias-brand-primary); }',
-      '.dsh-mail-badge { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); font-size:10px; font-weight:700; }',
+      '.dsh-mail-tab.is-active::after { content:""; position:absolute; left:12px; right:12px; bottom:0; height:3px; border-radius:3px 3px 0 0; background:linear-gradient(90deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 60%, white), var(--dsw-alias-brand-primary)); box-shadow:0 -1px 6px color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent); }',
+      '.dsh-mail-badge { display:grid; place-items:center; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 80%, white), var(--dsw-alias-brand-primary)); color:var(--dsw-alias-bg-base); font-size:10px; font-weight:700; box-shadow:0 2px 6px color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent); }',
 
       /* account chip */
       '.dsh-mail-accountbar { display:flex; align-items:center; gap:9px; padding:9px 16px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
@@ -416,35 +597,39 @@ window.__ModuleLoader__.load({
       '.dsh-mail-filterbar { display:flex; align-items:center; gap:4px; padding:7px 12px; border-bottom:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-base); }',
       '.dsh-mail-filter { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--dsw-alias-label-secondary); font-size:12px; font-weight:600; cursor:pointer; transition:background .12s,color .12s; }',
       '.dsh-mail-filter:hover { background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); }',
-      '.dsh-mail-filter.is-active { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent); color:var(--dsw-alias-brand-primary); }',
+      '.dsh-mail-filter.is-active { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 13%, transparent); color:var(--dsw-alias-brand-primary); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-brand-primary) 22%, transparent); }',
       '.dsh-mail-filtercount { display:grid; place-items:center; min-width:17px; height:17px; padding:0 5px; border-radius:9px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); font-size:10px; font-weight:700; }',
       '.dsh-mail-filter.is-active .dsh-mail-filtercount { background:var(--dsw-alias-brand-primary); color:var(--dsw-alias-bg-base); }',
 
       /* message list */
-      '.dsh-mail-list { flex:1; min-height:0; overflow:auto; padding:6px 8px 18px; }',
-      '.dsh-mail-row { display:flex; align-items:flex-start; gap:11px; padding:12px 11px; border-radius:11px; border:1px solid transparent; cursor:pointer; transition:background .12s, border-color .12s; }',
-      '.dsh-mail-row:hover { background:var(--dsw-alias-bg-layer-2); }',
-      '.dsh-mail-row:active { transform:scale(.995); }',
-      '.dsh-mail-avatar { width:36px; height:36px; flex:none; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:14px; font-weight:700; box-shadow:inset 0 -6px 10px rgba(0,0,0,.10); }',
+      '.dsh-mail-list { flex:1; min-height:0; overflow:auto; padding:8px 10px 20px; }',
+      '.dsh-mail-list::-webkit-scrollbar, .dsh-mail-scroll::-webkit-scrollbar { width:8px; height:8px; }',
+      '.dsh-mail-list::-webkit-scrollbar-thumb, .dsh-mail-scroll::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--dsw-alias-label-secondary) 22%, transparent); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }',
+      '.dsh-mail-list::-webkit-scrollbar-thumb:hover, .dsh-mail-scroll::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb, var(--dsw-alias-label-secondary) 38%, transparent); background-clip:padding-box; }',
+      '.dsh-mail-row { display:flex; align-items:flex-start; gap:12px; padding:13px 12px; margin-bottom:3px; border-radius:12px; border:1px solid transparent; cursor:pointer; transition:background .15s, border-color .15s, transform .1s, box-shadow .15s; }',
+      '.dsh-mail-row:hover { background:var(--dsw-alias-bg-layer-2); border-color:var(--dsw-alias-border-l1); box-shadow:0 2px 8px rgba(0,0,0,.05); }',
+      '.dsh-mail-row:active { transform:scale(.992); }',
+      '.dsh-mail-avatar { width:38px; height:38px; flex:none; border-radius:12px; display:grid; place-items:center; color:#fff; font-size:14px; font-weight:700; box-shadow:inset 0 -6px 10px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.1); }',
       '.dsh-mail-rowmain { flex:1; min-width:0; }',
       '.dsh-mail-rowtop { display:flex; align-items:baseline; gap:8px; }',
       '.dsh-mail-from { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:13px; }',
       '.dsh-mail-time { flex:none; font-size:11px; color:var(--dsw-alias-label-secondary); }',
       '.dsh-mail-subject { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; }',
       '.dsh-mail-preview { margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; color:var(--dsw-alias-label-secondary); }',
-      '.dsh-mail-row.is-unread { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, transparent); border-left:3px solid var(--dsw-alias-brand-primary); padding-left:8px; }',
-      '.dsh-mail-row.is-unread .dsh-mail-from, .dsh-mail-row.is-unread .dsh-mail-subject { color:var(--dsw-alias-label-primary); font-weight:700; }',
-      '.dsh-mail-unread { width:9px; height:9px; margin-top:7px; flex:none; border-radius:50%; background:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }',
+      '.dsh-mail-row.is-unread { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 5%, transparent); }',
+      '.dsh-mail-row.is-unread:hover { background:color-mix(in srgb, var(--dsw-alias-brand-primary) 9%, var(--dsw-alias-bg-layer-2)); }',
+      '.dsh-mail-row.is-unread .dsh-mail-from, .dsh-mail-row.is-unread .dsh-mail-subject { color:var(--dsw-alias-label-primary); font-weight:650; }',
+      '.dsh-mail-unread { width:7px; height:7px; margin-top:8px; flex:none; border-radius:50%; background:var(--dsw-alias-brand-primary); box-shadow:0 0 0 2px var(--dsw-alias-bg-base); }',
       '.dsh-mail-read .dsh-mail-from, .dsh-mail-read .dsh-mail-subject { color:var(--dsw-alias-label-secondary); font-weight:400; }',
 
       /* cards / forms */
-      '.dsh-mail-card { border:1px solid var(--dsw-alias-border-l1); border-radius:12px; padding:16px; margin-bottom:12px; background:var(--dsw-alias-bg-layer-1); box-shadow:0 1px 3px rgba(0,0,0,.05); }',
-      '.dsh-mail-cardhead { display:flex; align-items:center; gap:8px; margin-bottom:14px; font-size:14px; font-weight:650; }',
+      '.dsh-mail-card { border:1px solid var(--dsw-alias-border-l1); border-radius:14px; padding:18px; margin-bottom:14px; background:linear-gradient(180deg, var(--dsw-alias-bg-layer-1), var(--dsw-alias-bg-base)); box-shadow:0 2px 10px rgba(0,0,0,.05), inset 0 1px 0 rgba(255,255,255,.04); }',
+      '.dsh-mail-cardhead { display:flex; align-items:center; gap:9px; margin-bottom:16px; font-size:14px; font-weight:700; }',
       '.dsh-mail-grid { display:flex; gap:12px; flex-wrap:wrap; }',
       '.dsh-mail-field { display:flex; flex-direction:column; gap:5px; flex:1; min-width:160px; margin-bottom:11px; }',
       '.dsh-mail-label { font-size:11px; font-weight:600; color:var(--dsw-alias-label-secondary); }',
       '.dsh-mail-input, .dsh-mail-textarea, .dsh-mail-selectinput { width:100%; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; padding:8px 10px; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); font-size:13px; transition:border-color .12s, box-shadow .12s; }',
-      '.dsh-mail-input:focus, .dsh-mail-textarea:focus, .dsh-mail-selectinput:focus { outline:none; border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent); }',
+      '.dsh-mail-input:focus, .dsh-mail-textarea:focus, .dsh-mail-selectinput:focus { outline:none; border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent); background:var(--dsw-alias-bg-layer-1); }',
       '.dsh-mail-textarea { min-height:200px; resize:vertical; line-height:1.6; }',
       '.dsh-mail-hint { font-size:11.5px; color:var(--dsw-alias-label-secondary); line-height:1.6; }',
 
@@ -472,7 +657,7 @@ window.__ModuleLoader__.load({
 
       /* empty & loading */
       '.dsh-mail-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:64px 28px; text-align:center; }',
-      '.dsh-mail-emptyicon { width:56px; height:56px; border-radius:18px; display:grid; place-items:center; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); margin-bottom:4px; }',
+      '.dsh-mail-emptyicon { width:60px; height:60px; border-radius:20px; display:grid; place-items:center; background:color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, var(--dsw-alias-bg-layer-2)); color:var(--dsw-alias-brand-primary); margin-bottom:4px; box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 4px 14px rgba(0,0,0,.06); }',
       '.dsh-mail-emptytitle { font-size:14px; font-weight:650; color:var(--dsw-alias-label-primary); }',
       '.dsh-mail-emptysub { font-size:12px; color:var(--dsw-alias-label-secondary); max-width:320px; line-height:1.6; }',
       '.dsh-mail-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:56px 16px; color:var(--dsw-alias-label-secondary); animation:dsh-mail-fade .25s ease-out; }',
@@ -487,8 +672,8 @@ window.__ModuleLoader__.load({
       '@media (prefers-reduced-motion: reduce) { .dsh-mail-spinner, .dsh-mail-progress::after, .dsh-mail-loading, .dsh-mail-view { animation:none; } }',
 
       /* detail */
-      '.dsh-mail-detailhead { padding:20px 4px 14px; border-bottom:1px solid var(--dsw-alias-border-l1); margin-bottom:16px; }',
-      '.dsh-mail-detailtitle { margin:0 0 12px; font-size:20px; font-weight:650; line-height:1.4; }',
+      '.dsh-mail-detailhead { padding:22px 4px 16px; border-bottom:1px solid var(--dsw-alias-border-l1); margin-bottom:18px; }',
+      '.dsh-mail-detailtitle { margin:0 0 12px; font-size:21px; font-weight:700; line-height:1.4; letter-spacing:.2px; }',
       '.dsh-mail-detailfrom { display:flex; align-items:center; gap:10px; }',
       '.dsh-mail-detailfrom > div:nth-child(2) { flex:1; min-width:0; }',
       // A sender already in the address book keeps the button as a quiet state
@@ -496,8 +681,8 @@ window.__ModuleLoader__.load({
       '.dsh-mail-btn.is-done { color:var(--dsw-alias-state-success-primary); border-color:var(--dsw-alias-state-success-primary); }',
       '.dsh-mail-detailmeta { font-size:11.5px; color:var(--dsw-alias-label-secondary); margin-top:2px; }',
       '.dsh-mail-detailtoolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px; }',
-      '.dsh-mail-mailbody { width:100%; padding:18px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }',
-      '.dsh-mail-translated { border-color:var(--dsw-alias-brand-primary); background:color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, var(--dsw-alias-bg-layer-1)); }',
+      '.dsh-mail-mailbody { width:100%; padding:20px; border:1px solid var(--dsw-alias-border-l1); border-radius:14px; background:linear-gradient(180deg, var(--dsw-alias-bg-layer-1), var(--dsw-alias-bg-base)); color:var(--dsw-alias-label-primary); line-height:1.8; overflow-wrap:anywhere; word-break:break-word; box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 2px 8px rgba(0,0,0,.04); }',
+      '.dsh-mail-translated { border-color:var(--dsw-alias-brand-primary); background:color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, var(--dsw-alias-bg-layer-1)); }',
       '.dsh-mail-translatednotice { display:flex; align-items:center; gap:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px dashed var(--dsw-alias-border-l2); font-size:11px; color:var(--dsw-alias-label-secondary); }',
 
       // Third-party HTML: force theme colors so hardcoded mail colors (usually
@@ -510,6 +695,13 @@ window.__ModuleLoader__.load({
       '.dsh-mail-html p, .dsh-mail-html div { margin:0 0 8px; }',
       '.dsh-mail-html table { max-width:100%; border-collapse:collapse; }',
       '.dsh-mail-html blockquote { margin:8px 0; padding-left:12px; border-left:3px solid var(--dsw-alias-border-l2) !important; }',
+      '.dsh-mail-modal-backdrop { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; padding:20px; }',
+      '.dsh-mail-modal { width:100%; max-width:480px; max-height:80vh; overflow:auto; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l2); border-radius:14px; box-shadow:0 16px 48px rgba(0,0,0,.35); }',
+      '.dsh-mail-modal-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 18px; border-bottom:1px solid var(--dsw-alias-border-l1); font-weight:700; color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-modal-body { padding:14px 18px 18px; }',
+      '.dsh-mail-hint { color:var(--dsw-alias-label-secondary); font-size:12px; line-height:1.6; margin-bottom:10px; }',
+      '.dsh-mail-vault-opt { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; text-align:left; padding:10px 12px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); cursor:pointer; margin-top:8px; }',
+      '.dsh-mail-vault-opt:hover { border-color:var(--dsw-alias-brand-primary); filter:brightness(.98); }',
     ].join('\n');
 
     const PRESETS = {
@@ -603,12 +795,17 @@ window.__ModuleLoader__.load({
     };
 
     // When the background poller detects new mail it publishes the affected
-    // account ids here so an open MailPanel can refresh its list in place.
+    // account ids plus the freshly seen messages, so an open MailPanel can
+    // merge them into its list without re-running the same IMAP query.
     // Module scope because detection happens outside React, in the poller.
     const MAIL_EVENTS = {
       listeners: new Set(),
       subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-      emit(accountIds) { for (const fn of this.listeners) { try { fn(accountIds); } catch { /* dead listener */ } } },
+      emit(accountIds, freshByAccount) {
+        for (const fn of this.listeners) {
+          try { fn(accountIds, freshByAccount); } catch { /* dead listener */ }
+        }
+      },
     };
 
     // A mail that arrived while DSH was restarting must not be swallowed by
@@ -779,6 +976,7 @@ window.__ModuleLoader__.load({
       if (NOTIFY.busy) return Object.assign({}, NOTIFY.diag);
       NOTIFY.busy = true;
       const changedAccounts = [];
+      const freshByAccount = Object.create(null);
       try {
         const mode = NOTIFY.settings.notifyMode || 'pet';
         if (mode === 'system' && notifyPermission() !== 'granted') {
@@ -800,7 +998,9 @@ window.__ModuleLoader__.load({
         NOTIFY.diag.lastCheck = Date.now();
         NOTIFY.diag.error = null;
         const now = Date.now();
-        for (const acc of accounts) {
+        // Check every account concurrently; previously a slow IMAP session on
+        // one account delayed every other account's check behind it.
+        await Promise.all(accounts.map(async acc => {
           try {
             const mr = await fetch(API, {
               method: 'POST', headers: { 'content-type': 'application/json' },
@@ -809,36 +1009,24 @@ window.__ModuleLoader__.load({
             const md = await mr.json();
             if (!md || md.ok === false || !Array.isArray(md.messages)) {
               NOTIFY.diag.error = 'listMessages:' + (acc.name || acc.id) + ':' + (md && md.error ? md.error : 'bad-response');
-              continue;
+              return;
             }
             const uids = md.messages.map(m => String(m.uid));
             const prev = NOTIFY.baselines[acc.id];
             NOTIFY.baselines[acc.id] = uids;
+            let fresh = [];
             if (!prev) {
               // First observation: normally seed only, but a mail that arrived
               // during a restart (unread + recent Date header) must still alert.
-              const recent = md.messages.filter(m =>
+              fresh = md.messages.filter(m =>
                 m && m.seen === false && m.date &&
                 (now - Date.parse(m.date)) >= 0 &&
                 (now - Date.parse(m.date)) <= RECENT_MAIL_MS
               );
-              if (recent.length === 0) continue;
-              const latest = recent[0] || {};
-              const who = acc.name ? acc.name + '：' : '';
-              const res = await deliverAlert(
-                t('notifyTitle'),
-                who + (latest.subject || t('noSubject')) + ' · ' + recent.length + ' ' + t('notifyBody'),
-                { tag: 'dsh-mail-new' }
-              );
-              NOTIFY.diag.alerts += 1;
-              NOTIFY.diag.lastAlert = Date.now();
-              BADGE.add(recent.length);
-              changedAccounts.push(acc.id);
-              if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
-              continue;
+            } else {
+              const prevSet = new Set(prev);
+              fresh = md.messages.filter(m => !prevSet.has(String(m.uid)));
             }
-            const prevSet = new Set(prev);
-            const fresh = md.messages.filter(m => !prevSet.has(String(m.uid)));
             if (fresh.length > 0) {
               const latest = fresh[0] || {};
               const who = acc.name ? acc.name + '：' : '';
@@ -851,18 +1039,21 @@ window.__ModuleLoader__.load({
               NOTIFY.diag.lastAlert = Date.now();
               BADGE.add(fresh.length);
               changedAccounts.push(acc.id);
+              // Hand the list we already fetched to the open panel so it can
+              // update in place instead of issuing a second listMessages.
+              freshByAccount[acc.id] = md.messages;
               if (!res.petOk && !res.sysOk) NOTIFY.diag.error = 'deliver:' + (NOTIFY.lastError || 'no-channel');
             }
           } catch (e) {
             NOTIFY.diag.error = 'account:' + (acc.name || acc.id) + ':' + (e && e.message ? e.message : String(e));
           }
-        }
+        }));
       } catch (e) {
         NOTIFY.diag.error = 'poll:' + (e && e.message ? e.message : String(e));
       } finally {
         NOTIFY.busy = false;
       }
-      if (changedAccounts.length) MAIL_EVENTS.emit(changedAccounts);
+      if (changedAccounts.length) MAIL_EVENTS.emit(changedAccounts, freshByAccount);
       return Object.assign({}, NOTIFY.diag);
     }
 
@@ -1089,8 +1280,36 @@ window.__ModuleLoader__.load({
       const [loadingContacts, setLoadingContacts] = useState(false);
       const [refreshState, setRefreshState] = useState('idle'); // idle | loading | ok | error
       const refreshTimerRef = useRef(null);
+      // In-flight dedupe must survive re-renders; a plain let would reset every
+      // time React re-rendered the panel and allow duplicate IMAP sessions.
+      const inflightRef = useRef({ messages: null, sent: null, contacts: null });
       const [flash, setFlash] = useState(null);
       const [form, setForm] = usePersistent('form', { preset: 'qq', name: '', username: '', authCode: '', imapHost: PRESETS.qq.imapHost, imapPort: 993, smtpHost: PRESETS.qq.smtpHost, smtpPort: 465 });
+      // Credential-vault bridge (no-op if the vault plugin is not installed).
+      const vaultClientRef = useRef(null);
+      if (!vaultClientRef.current) vaultClientRef.current = createVaultV1Client();
+      const [vaultOpen, setVaultOpen] = useState(false);
+      const [vaultEntries, setVaultEntries] = useState(null);
+      const [vaultBusy, setVaultBusy] = useState(false);
+      async function openVaultPicker() {
+        setVaultOpen(true);
+        setVaultEntries(null);
+        setVaultBusy(true);
+        try {
+          const list = await vaultClientRef.current.query({ category: 'account', limit: 100 });
+          setVaultEntries(list);
+        } catch (e) {
+          setVaultEntries([]);
+        } finally {
+          setVaultBusy(false);
+        }
+      }
+      function pickVaultSecret(entry) {
+        const value = vaultClientRef.current.secretOf(entry);
+        setForm(function (f) { return Object.assign({}, f, { authCode: value }); });
+        setVaultOpen(false);
+        notify('success', t('saved'));
+      }
       const [compose, setCompose] = usePersistent('compose', { to: '', subject: '', body: '' });
       // Outgoing attachments live in React state (not PERSIST): they hold base64
       // file bytes, which must not be written to profile storage.
@@ -1114,15 +1333,30 @@ window.__ModuleLoader__.load({
       // activeId/view. New mail on the currently open account refreshes the
       // inbox list in place (silent, no spinner/flash).
       const onMailRef = useRef(() => {});
-      onMailRef.current = (accountIds) => {
+      onMailRef.current = (accountIds, freshByAccount) => {
         if (!activeId || view !== 'inbox') return;
         if (Array.isArray(accountIds) && accountIds.length && accountIds.indexOf(activeId) === -1) return;
+        // The poller already fetched this account's list to detect the new
+        // mail. Merge any new UIDs straight into state/cache instead of
+        // opening a second IMAP session for the same data.
+        const polled = freshByAccount && freshByAccount[activeId];
+        const current = cache[activeId] || messages || [];
+        if (Array.isArray(polled) && current.length) {
+          const seen = new Set(current.map(m => String(m.uid)));
+          const added = polled.filter(m => !seen.has(String(m.uid)));
+          if (added.length) {
+            const merged = added.concat(current);
+            setMessages(merged);
+            setCache(prev => Object.assign({}, prev, { [activeId]: merged }));
+          }
+          return;
+        }
         void loadMessages(false);
       };
 
       useEffect(() => {
         if (!PERSIST.accounts) refreshAccounts();
-        const off = MAIL_EVENTS.subscribe(ids => onMailRef.current(ids));
+        const off = MAIL_EVENTS.subscribe((ids, freshByAccount) => onMailRef.current(ids, freshByAccount));
         return () => {
           off();
           if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -1205,55 +1439,90 @@ window.__ModuleLoader__.load({
 
       async function loadMessages(showProgress) {
         if (!activeId) return false;
+        // Collapse overlapping refreshes (account switch vs. new-mail event)
+        // into one request per account instead of opening duplicate sessions.
+        const inflight = inflightRef.current;
+        if (inflight.messages && inflight.messages.id === activeId) return inflight.messages.promise;
         // Cache-first: if we already have this account's list, keep it visible
         // while the fresh list loads in the background (no blank/Loading flash).
         const cached = cache[activeId];
         if (showProgress !== false) setLoadingMessages(!(cached && cached.length));
+        const id = activeId;
+        const promise = (async () => {
+          try {
+            const data = await rpc('listMessages', { id, limit: 25 });
+            const fresh = data.messages || [];
+            setMessages(fresh);
+            setCache(prev => Object.assign({}, prev, { [id]: fresh }));
+            return true;
+          } catch (e) {
+            reportError(e);
+            return false;
+          } finally {
+            setLoadingMessages(false);
+          }
+        })();
+        inflight.messages = { id, promise };
         try {
-          const data = await rpc('listMessages', { id: activeId, limit: 25 });
-          const fresh = data.messages || [];
-          setMessages(fresh);
-          setCache(prev => Object.assign({}, prev, { [activeId]: fresh }));
-          return true;
-        } catch (e) {
-          reportError(e);
-          return false;
+          return await promise;
         } finally {
-          setLoadingMessages(false);
+          if (inflight.messages && inflight.messages.id === id) inflight.messages = null;
         }
       }
 
       async function loadSent() {
         if (!activeId) return false;
+        const inflight = inflightRef.current;
+        if (inflight.sent && inflight.sent.id === activeId) return inflight.sent.promise;
         setBusy(true);
         setLoadingSent(true);
+        const id = activeId;
+        const promise = (async () => {
+          try {
+            const data = await rpc('sentMessages', { id });
+            setSent(data.sent || []);
+            return true;
+          } catch (e) {
+            reportError(e);
+            return false;
+          } finally {
+            setLoadingSent(false);
+            setBusy(false);
+          }
+        })();
+        inflight.sent = { id, promise };
         try {
-          const data = await rpc('sentMessages', { id: activeId });
-          setSent(data.sent || []);
-          return true;
-        } catch (e) {
-          reportError(e);
-          return false;
+          return await promise;
         } finally {
-          setLoadingSent(false);
-          setBusy(false);
+          if (inflight.sent && inflight.sent.id === id) inflight.sent = null;
         }
       }
 
       async function loadContacts() {
         if (!activeId) return false;
+        const inflight = inflightRef.current;
+        if (inflight.contacts && inflight.contacts.id === activeId) return inflight.contacts.promise;
         setBusy(true);
         setLoadingContacts(true);
+        const id = activeId;
+        const promise = (async () => {
+          try {
+            const data = await rpc('listContacts', { id });
+            setContacts(data.contacts || []);
+            return true;
+          } catch (e) {
+            reportError(e);
+            return false;
+          } finally {
+            setLoadingContacts(false);
+            setBusy(false);
+          }
+        })();
+        inflight.contacts = { id, promise };
         try {
-          const data = await rpc('listContacts', { id: activeId });
-          setContacts(data.contacts || []);
-          return true;
-        } catch (e) {
-          reportError(e);
-          return false;
+          return await promise;
         } finally {
-          setLoadingContacts(false);
-          setBusy(false);
+          if (inflight.contacts && inflight.contacts.id === id) inflight.contacts = null;
         }
       }
 
@@ -1277,10 +1546,8 @@ window.__ModuleLoader__.load({
           setSent([]);
           setContacts([]);
           setDetail(null);
-          PERSIST.loadedIds = { inbox: activeId, sent: activeId, contacts: activeId };
+          PERSIST.loadedIds = { inbox: activeId, sent: '', contacts: '' };
           loadMessages();
-          loadSent();
-          loadContacts();
         }
       }, [activeId]);
 
@@ -1583,6 +1850,17 @@ window.__ModuleLoader__.load({
       function navTo(key) {
         setSentDetail(null);
         setView(key);
+        // Sent/contacts are loaded on demand (first visit after an account
+        // switch), so opening the mail panel no longer waits on three IMAP
+        // sessions at once. Guard with PERSIST.loadedIds to avoid refetching
+        // on every tab click or remount.
+        if (key === 'sent' && activeId && PERSIST.loadedIds.sent !== activeId) {
+          PERSIST.loadedIds.sent = activeId;
+          loadSent();
+        } else if (key === 'contacts' && activeId && PERSIST.loadedIds.contacts !== activeId) {
+          PERSIST.loadedIds.contacts = activeId;
+          loadContacts();
+        }
       }
 
       return h('div', { className: 'dsh-mail' },
@@ -1833,7 +2111,10 @@ window.__ModuleLoader__.load({
               ),
               h('div', { className: 'dsh-mail-field' },
                 h('span', { className: 'dsh-mail-label' }, t('authCode')),
-                h('input', { className: 'dsh-mail-input', type: 'password', value: form.authCode, onChange: e => setForm(Object.assign({}, form, { authCode: e.target.value })) })
+                h('input', { className: 'dsh-mail-input', type: 'password', value: form.authCode, onChange: e => setForm(Object.assign({}, form, { authCode: e.target.value })) }),
+                vaultClientRef.current.isAvailable()
+                  ? h('button', { className: 'dsh-mail-btn', type: 'button', style: { marginTop: 8 }, onClick: openVaultPicker }, h(Ico, { name: 'accounts', size: 15 }), t('fillFromVault'))
+                  : null
               ),
               h('div', { className: 'dsh-mail-grid' },
                 h('div', { className: 'dsh-mail-field' },
@@ -1856,6 +2137,30 @@ window.__ModuleLoader__.load({
                 )
               ),
               h('button', { className: 'dsh-mail-btn dsh-mail-btn-primary', onClick: saveAccount, disabled: busy || !form.username || !form.authCode }, h(Ico, { name: 'check', size: 15 }), t('save'))
+            )
+          )
+        ),
+
+        /* --------------------------- VAULT PICKER ---------------------------- */
+        vaultOpen && h('div', { className: 'dsh-mail-modal-backdrop', onClick: () => setVaultOpen(false) },
+          h('div', { className: 'dsh-mail-modal', onClick: e => e.stopPropagation() },
+            h('div', { className: 'dsh-mail-modal-head' },
+              h('span', null, t('vaultPickTitle')),
+              h('button', { className: 'dsh-mail-btn', onClick: () => setVaultOpen(false) }, t('cancel'))
+            ),
+            h('div', { className: 'dsh-mail-modal-body' },
+              h('div', { className: 'dsh-mail-hint' }, t('vaultPickHint')),
+              vaultBusy ? h('div', { className: 'dsh-mail-hint' }, t('vaultPickLoading'))
+                : (vaultEntries && vaultEntries.length === 0) ? h('div', { className: 'dsh-mail-hint' }, t('vaultPickEmpty'))
+                : (vaultEntries || []).map(entry =>
+                    h('button', {
+                      key: entry.id, type: 'button', className: 'dsh-mail-vault-opt',
+                      onClick: () => pickVaultSecret(entry)
+                    },
+                      h('span', { style: { fontWeight: 650 } }, entry.title || '(untitled)'),
+                      h('span', { className: 'dsh-mail-hint' }, entry.username || entry.provider || '')
+                    )
+                  )
             )
           )
         ),
@@ -2037,6 +2342,42 @@ window.__ModuleLoader__.load({
     // half stores it in the credential store), so this toggle and the AI tool
     // share one host-owned value without depending on configForms, which is not
     // available on this DSH build.
+    // Scoped stylesheet for the Settings-panel section. The mail panel's CSS
+    // lives under .dsh-mail; the settings shell renders outside that tree, so
+    // this section carries its own prefixed stylesheet (same design language:
+    // soft gradients, 9/14px radii, hover/active/focus states, theme tokens).
+    const SETTINGS_CSS = [
+      '.dsh-mail-set { padding:4px; max-width:560px; color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.55; -webkit-font-smoothing:antialiased; }',
+      '.dsh-mail-set * { box-sizing:border-box; }',
+      '.dsh-mail-set h2 { margin:0 0 8px; font-size:18px; font-weight:700; line-height:1.4; letter-spacing:.2px; }',
+      '.dsh-mail-set h3 { margin:24px 0 8px; padding-top:18px; border-top:1px solid var(--dsw-alias-border-l1); font-size:15px; font-weight:650; line-height:1.4; }',
+      '.dsh-mail-set p { margin:0 0 12px; font-size:13px; line-height:1.7; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-set label { display:flex; align-items:center; gap:10px; cursor:pointer; font-size:14px; line-height:1.5; color:var(--dsw-alias-label-primary); }',
+      '.dsh-mail-set label.dsh-mail-set-gap { margin-top:10px; }',
+      '.dsh-mail-set input[type="checkbox"] { width:16px; height:16px; flex:none; accent-color:var(--dsw-alias-brand-primary); cursor:pointer; }',
+      '.dsh-mail-set input[type="number"], .dsh-mail-set select { width:84px; padding:5px 8px; border:1px solid var(--dsw-alias-border-l2); border-radius:8px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); font-size:13px; font-family:inherit; transition:border-color .12s, box-shadow .12s; }',
+      '.dsh-mail-set input[type="number"]:focus, .dsh-mail-set select:focus { outline:none; border-color:var(--dsw-alias-brand-primary); box-shadow:0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent); }',
+      '.dsh-mail-set input:disabled, .dsh-mail-set select:disabled { opacity:.6; cursor:not-allowed; }',
+      '.dsh-mail-set .dsh-mail-set-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:6px 16px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font-size:13px; font-weight:600; font-family:inherit; cursor:pointer; transition:filter .15s, transform .08s, box-shadow .15s, border-color .15s; }',
+      '.dsh-mail-set .dsh-mail-set-btn:hover:not(:disabled) { filter:brightness(.97); border-color:var(--dsw-alias-brand-primary); box-shadow:0 2px 8px rgba(0,0,0,.08); }',
+      '.dsh-mail-set .dsh-mail-set-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 5px rgba(0,0,0,.12); }',
+      '.dsh-mail-set .dsh-mail-set-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }',
+      '.dsh-mail-set .dsh-mail-set-btn:disabled { opacity:.5; cursor:not-allowed; }',
+      '.dsh-mail-set .dsh-mail-set-btn-primary { background:linear-gradient(135deg, color-mix(in srgb, var(--dsw-alias-brand-primary) 82%, white), var(--dsw-alias-brand-primary)); border-color:transparent; color:var(--dsw-alias-bg-base); box-shadow:0 3px 10px color-mix(in srgb, var(--dsw-alias-brand-primary) 32%, transparent); }',
+      '.dsh-mail-set .dsh-mail-set-btn-primary:hover:not(:disabled) { filter:brightness(1.06); box-shadow:0 5px 14px color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent); }',
+      '.dsh-mail-set .dsh-mail-set-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:14px; }',
+      '.dsh-mail-set .dsh-mail-set-card { margin-top:14px; padding:12px; border:1px solid var(--dsw-alias-border-l1); border-radius:14px; background:linear-gradient(180deg, var(--dsw-alias-bg-layer-1), var(--dsw-alias-bg-base)); box-shadow:0 2px 10px rgba(0,0,0,.05), inset 0 1px 0 rgba(255,255,255,.04); }',
+      '.dsh-mail-set .dsh-mail-set-cardhead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }',
+      '.dsh-mail-set .dsh-mail-spacer { flex:1; min-width:0; }',
+      '.dsh-mail-set .dsh-mail-set-meta { margin-top:6px; font-size:12px; line-height:1.7; color:var(--dsw-alias-label-secondary); }',
+      '.dsh-mail-set .dsh-mail-set-meta.is-ok { color:var(--dsw-alias-state-success-primary); }',
+      '.dsh-mail-set .dsh-mail-set-meta.is-error { color:var(--dsw-alias-state-error-primary); }',
+      '.dsh-mail-set p.dsh-mail-set-note { margin:8px 0 0; font-size:12px; line-height:1.6; }',
+      '.dsh-mail-set p.dsh-mail-set-note.is-ok { color:var(--dsw-alias-state-success-primary); }',
+      '.dsh-mail-set p.dsh-mail-set-note.is-error { color:var(--dsw-alias-state-error-primary); }',
+      '@media (prefers-reduced-motion: reduce) { .dsh-mail-set .dsh-mail-set-btn { transition:none; } }',
+    ].join('\n');
+
     function MailSettingsSection(props) {
       const tr = props && props.t ? props.t : t;
       const [draft, setDraft] = useState({ agentMailAccess: false, notifyEnabled: true, notifyInterval: 60, notifyMode: 'pet' });
@@ -2201,64 +2542,51 @@ window.__ModuleLoader__.load({
         setChecking(false);
       };
 
-      const field = {
-        display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
-        fontSize: 14, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)',
-      };
-      const hint = { margin: '6px 0 0', fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' };
-      const numInput = {
-        width: 84, padding: '4px 8px', borderRadius: 6, fontSize: 13,
-        border: '1px solid var(--dsw-alias-border-l2)',
-        background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-      };
       const dirty = JSON.stringify(draft) !== JSON.stringify(stored);
       // In pure system-notification mode, hide all pet-related copy.
       const isSystemOnly = (draft.notifyMode || 'pet') === 'system';
-      return h('div', { style: { padding: 4, maxWidth: 560 } },
-        h('h2', { style: { margin: '0 0 8px', fontSize: 18, lineHeight: 1.4 } }, tr('settingsTitle')),
+      return h('div', { className: 'dsh-mail-set' },
+        h('style', null, SETTINGS_CSS),
+        h('h2', null, tr('settingsTitle')),
 
         // AI assistant access toggle (unchanged behaviour).
-        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr('settingsDescription')),
-        h('label', { htmlFor: 'settings-dsh-mail-agent-access', style: field },
+        h('p', null, tr('settingsDescription')),
+        h('label', { htmlFor: 'settings-dsh-mail-agent-access' },
           h('input', {
             id: 'settings-dsh-mail-agent-access', type: 'checkbox',
             checked: draft.agentMailAccess, disabled: saving || !loaded,
             onChange: (e) => setDraft({ ...draft, agentMailAccess: !!(e && e.target && e.target.checked) }),
-            style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
           }),
           tr('agentMailAccessLabel')
         ),
-        h('p', { style: hint }, tr('agentMailAccessHint')),
+        h('p', null, tr('agentMailAccessHint')),
 
         // New-mail notification section.
-        h('h3', { style: { margin: '24px 0 8px', fontSize: 15, lineHeight: 1.4 } }, tr('notifySectionTitle')),
-        h('p', { style: { margin: '0 0 12px', fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } }, tr(isSystemOnly ? 'notifySectionHintSystem' : 'notifySectionHint')),
-        h('label', { htmlFor: 'settings-dsh-mail-notify', style: field },
+        h('h3', null, tr('notifySectionTitle')),
+        h('p', null, tr(isSystemOnly ? 'notifySectionHintSystem' : 'notifySectionHint')),
+        h('label', { htmlFor: 'settings-dsh-mail-notify' },
           h('input', {
             id: 'settings-dsh-mail-notify', type: 'checkbox',
             checked: draft.notifyEnabled, disabled: saving || !loaded,
             onChange: (e) => setDraft({ ...draft, notifyEnabled: !!(e && e.target && e.target.checked) }),
-            style: { width: 16, height: 16, accentColor: 'var(--dsw-alias-brand-primary)', cursor: 'pointer' },
           }),
           tr(isSystemOnly ? 'notifyEnabledLabelSystem' : 'notifyEnabledLabel')
         ),
-        h('label', { htmlFor: 'settings-dsh-mail-interval', style: { ...field, marginTop: 10 } },
+        h('label', { htmlFor: 'settings-dsh-mail-interval', className: 'dsh-mail-set-gap' },
           h('span', null, tr('notifyIntervalLabel')),
           h('input', {
             id: 'settings-dsh-mail-interval', type: 'number', min: 15, max: 3600,
             value: draft.notifyInterval, disabled: saving || !loaded,
             onChange: (e) => setDraft({ ...draft, notifyInterval: Number(e && e.target && e.target.value) || 60 }),
-            style: numInput,
           })
         ),
-        h('label', { htmlFor: 'settings-dsh-mail-mode', style: { ...field, marginTop: 10 } },
+        h('label', { htmlFor: 'settings-dsh-mail-mode', className: 'dsh-mail-set-gap' },
           h('span', null, tr('notifyMode')),
           h('select', {
             id: 'settings-dsh-mail-mode',
             value: draft.notifyMode || 'pet',
             disabled: saving || !loaded,
             onChange: (e) => setDraft({ ...draft, notifyMode: (e && e.target && e.target.value) || 'pet' }),
-            style: numInput,
           },
             h('option', { value: 'pet' }, tr('notifyModePet')),
             h('option', { value: 'system' }, tr('notifyModeSystem')),
@@ -2267,92 +2595,68 @@ window.__ModuleLoader__.load({
         ),
 
         // Permission row.
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 } },
+        h('div', { className: 'dsh-mail-set-row' },
           h('button', {
-            type: 'button', disabled: asking || perm === 'granted' || perm === 'unsupported',
+            type: 'button', className: 'dsh-mail-set-btn',
+            disabled: asking || perm === 'granted' || perm === 'unsupported',
             onClick: () => { void requestPerm(); },
-            style: {
-              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
-              background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-              fontSize: 13, cursor: asking || perm === 'granted' ? 'default' : 'pointer',
-              opacity: asking || perm === 'granted' ? 0.6 : 1,
-            },
           }, asking ? tr('notifyPermissionAsking') : tr('notifyPermission')),
-          h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
+          h('span', null,
             perm === 'granted' ? tr('notifyPermissionGranted')
               : perm === 'denied' ? tr('notifyPermissionDenied')
               : perm === 'unsupported' ? tr('notifyPermissionUnsupported') : ''
           ),
           h('button', {
-            type: 'button', disabled: asking,
+            type: 'button', className: 'dsh-mail-set-btn dsh-mail-set-btn-primary',
+            disabled: asking,
             onClick: () => { void sendTest(); },
-            style: {
-              padding: '6px 16px', borderRadius: 6, border: 'none',
-              background: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-bg-base)',
-              fontSize: 13, cursor: asking ? 'default' : 'pointer',
-              opacity: asking ? 0.5 : 1,
-            },
           }, tr('notifyTest'))
         ),
         testMsg ? h('p', {
-          style: { ...hint, color: tested ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' },
+          className: 'dsh-mail-set-note ' + (tested ? 'is-ok' : 'is-error'),
         }, testMsg) : null,
 
         // Live detection diagnostics + manual check. These make the otherwise
         // invisible background chain observable to the user and to us.
-        h('div', { style: { marginTop: 14, padding: 10, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l2)' } },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
-            h('strong', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, tr('notifyDiagTitle')),
-            h('span', { style: { fontSize: 12, color: diag.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+        h('div', { className: 'dsh-mail-set-card' },
+          h('div', { className: 'dsh-mail-set-cardhead' },
+            h('strong', null, tr('notifyDiagTitle')),
+            h('span', { className: diag.running ? 'dsh-mail-set-meta is-ok' : 'dsh-mail-set-meta is-error' },
               diag.running ? tr('notifyDiagRunning') : tr('notifyDiagStopped')),
             h('span', { className: 'dsh-mail-spacer' }),
             h('button', {
-              type: 'button', disabled: checking || !loaded,
+              type: 'button', className: 'dsh-mail-set-btn',
+              disabled: checking || !loaded,
               onClick: () => { void checkNow(); },
-              style: {
-                padding: '5px 12px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
-                background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
-                fontSize: 12, cursor: checking || !loaded ? 'default' : 'pointer',
-                opacity: checking || !loaded ? 0.6 : 1,
-              },
             }, checking ? tr('notifyChecking') : tr('notifyCheckNow'))
           ),
-          h('div', { style: { marginTop: 6, fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary)' } },
+          h('div', { className: 'dsh-mail-set-meta' },
             tr('notifyDiagAccounts') + ': ' + (diag.accounts || 0) + '  ·  ' +
             tr('notifyDiagChecks') + ': ' + (diag.checks || 0) + '  ·  ' +
             tr(isSystemOnly ? 'notifyDiagAlertsSystem' : 'notifyDiagAlerts') + ': ' + (diag.alerts || 0) + '  ·  ' +
             tr('notifyDiagLastCheck') + ': ' + (diag.lastCheck ? new Date(diag.lastCheck).toLocaleString() : tr('notifyDiagNever'))
           ),
-          h('div', { style: { marginTop: 2, fontSize: 12, lineHeight: 1.7, color: diag.error ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-success-primary)' } },
+          h('div', { className: 'dsh-mail-set-meta ' + (diag.error ? 'is-error' : 'is-ok') },
             tr('notifyDiagError') + ': ' + (diag.error || tr('notifyDiagOk'))
           ),
-          checkMsg ? h('p', { style: { margin: '6px 0 0', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, checkMsg) : null
+          checkMsg ? h('p', { className: 'dsh-mail-set-note' }, checkMsg) : null
         ),
 
         failed
-          ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, tr('settingsSaveFailed') + (saveError ? ' (' + saveError + ')' : ''))
+          ? h('p', { className: 'dsh-mail-set-note is-error' }, tr('settingsSaveFailed') + (saveError ? ' (' + saveError + ')' : ''))
           : saved
-            ? h('p', { style: { margin: '8px 0 0', fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' } }, tr('settingsSaveSuccess'))
+            ? h('p', { className: 'dsh-mail-set-note is-ok' }, tr('settingsSaveSuccess'))
             : null,
-        h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
+        h('div', { className: 'dsh-mail-set-row' },
           h('button', {
-            type: 'button',
+            type: 'button', className: 'dsh-mail-set-btn dsh-mail-set-btn-primary',
             disabled: !dirty || saving,
             onClick: () => { void save(); },
-            style: {
-              padding: '6px 16px', borderRadius: 6, border: 'none', cursor: dirty && !saving ? 'pointer' : 'default',
-              background: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-bg-base)', fontSize: 13,
-              opacity: dirty && !saving ? 1 : 0.5,
-            },
           }, saving ? tr('settingsSaving') : tr('settingsSave')),
           dirty ? h('button', {
-            type: 'button',
+            type: 'button', className: 'dsh-mail-set-btn',
             disabled: saving,
             onClick: () => setDraft(stored),
-            style: {
-              padding: '6px 16px', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)',
-              background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, cursor: 'pointer',
-            },
           }, tr('cancel')) : null
         )
       );

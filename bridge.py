@@ -507,6 +507,123 @@ def _imap_close(client):
         pass
 
 
+def _fetch_summary(msg_data):
+    """Parse a partial FETCH reply into ``(message, flags)``.
+
+    The list view only needs a few headers and a short preview, so we ask IMAP
+    for just those instead of the full RFC822 payload (which may carry large
+    attachments). ``msg_data`` is imaplib's FETCH tuple list. Returns
+    ``(None, flags)`` when nothing usable was returned, so the caller can fall
+    back to a full fetch.
+    """
+    header_bytes = None
+    body_bytes = None
+    flags = ""
+    for item in msg_data:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        spec = item[0]
+        if isinstance(spec, str):
+            spec = spec.encode("utf-8", "replace")
+        upper = spec.upper()
+        if b"BODY[1]" in upper:
+            body_bytes = item[1]
+        elif b"BODY[HEADER" in upper:
+            header_bytes = item[1]
+        match = re.search(rb"FLAGS \(([^)]*)\)", spec)
+        if match:
+            flags = match.group(1).decode(errors="replace")
+    if header_bytes is None and body_bytes is None:
+        return None, flags
+    from email import message_from_bytes
+    # HEADER.FIELDS already ends with a blank line; one more separator keeps
+    # the body from being swallowed into the header block.
+    raw = (header_bytes or b"") + b"\r\n" + (body_bytes or b"")
+    return message_from_bytes(raw), flags
+
+
+def _full_message(client, uid):
+    """Last-resort full RFC822 fetch, used only when a partial fetch fails."""
+    typ, data = client.uid("FETCH", uid, "(RFC822 FLAGS)")
+    if typ != "OK" or not data:
+        return None, ""
+    from email import message_from_bytes
+    first = next((item for item in data if isinstance(item, tuple) and item[1]), None)
+    if first is None:
+        return None, ""
+    flags = ""
+    for item in data:
+        if not isinstance(item, tuple):
+            continue
+        match = re.search(rb"FLAGS \(([^)]*)\)", item[0] if isinstance(item[0], bytes) else str(item[0]).encode())
+        if match:
+            flags = match.group(1).decode(errors="replace")
+            break
+    return message_from_bytes(first[1]), flags
+
+
+def _fetch_summaries_bulk(client, uids):
+    """Fetch summary data for many UIDs in a single IMAP round trip.
+
+    imaplib returns one ``(spec, literal)`` tuple per literal plus plain
+    trailer bytes. Each message's first tuple carries ``UID <n>``; later
+    literals for that message (the body part) only carry the item name, so we
+    carry the current UID forward. Returns ``uid -> (msg, flags)``; UIDs the
+    server did not echo are simply absent and the caller falls back to a
+    per-UID fetch for those.
+    """
+    if not uids:
+        return {}
+    fetch_spec = "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)] BODY.PEEK[1])"
+    uid_set = ",".join(u.decode() if isinstance(u, bytes) else str(u) for u in uids)
+    try:
+        typ, data = client.uid("FETCH", uid_set, fetch_spec)
+    except Exception:
+        return {}
+    if typ != "OK" or not data:
+        return {}
+    parts = {}          # uid -> [header_bytes, body_bytes, flags]
+    current = None
+    for item in data:
+        if isinstance(item, tuple):
+            spec, literal = item[0], item[1]
+        elif isinstance(item, bytes):
+            spec, literal = item, None
+        else:
+            continue
+        if isinstance(spec, str):
+            spec = spec.encode("utf-8", "replace")
+        match = re.search(rb"UID\s+(\d+)", spec)
+        if match:
+            key = match.group(1).decode()
+            if key not in parts:
+                parts[key] = [None, None, ""]
+            current = key
+        if current is None:
+            continue
+        upper = spec.upper()
+        if literal is not None and b"BODY[1]" in upper:
+            parts[current][1] = literal
+        elif literal is not None and b"BODY[HEADER" in upper:
+            parts[current][0] = literal
+        flags_match = re.search(rb"FLAGS \(([^)]*)\)", spec)
+        if flags_match:
+            parts[current][2] = flags_match.group(1).decode(errors="replace")
+    from email import message_from_bytes
+    result = {}
+    for key, (header_bytes, body_bytes, flags) in parts.items():
+        if header_bytes is None and body_bytes is None:
+            continue
+        # HEADER.FIELDS ends with a blank line; one more separator keeps the
+        # body out of the header block when reassembling the message.
+        raw = (header_bytes or b"") + b"\r\n" + (body_bytes or b"")
+        try:
+            result[key] = (message_from_bytes(raw), flags)
+        except Exception:
+            pass
+    return result
+
+
 def _list_messages_in(client, folder, limit):
     """List recent messages of one folder as summary dicts."""
     selected = False
@@ -527,25 +644,34 @@ def _list_messages_in(client, folder, limit):
     ids = (data[0] or b"").split()
     chosen = ids[-limit:][::-1]
     messages = []
+    # Fetch displayed headers, first body part and flags for all UIDs in a
+    # single round trip. Servers that do not echo every UID are covered by a
+    # per-UID fallback below, so the result stays identical to serial FETCH.
+    fetch_spec = "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)] BODY.PEEK[1])"
+    bulk = _fetch_summaries_bulk(client, chosen)
     for uid in chosen:
         try:
-            typ, msg_data = client.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or msg_data[0] is None:
+            key = uid.decode() if isinstance(uid, bytes) else str(uid)
+            pair = bulk.get(key)
+            if pair is not None:
+                msg, flags = pair
+            else:
+                msg = flags = None
+                try:
+                    typ, msg_data = client.uid("FETCH", uid, fetch_spec)
+                    if typ == "OK" and msg_data:
+                        msg, flags = _fetch_summary(msg_data)
+                except Exception:
+                    pass
+                if msg is None:  # partial fetch failed or returned nothing usable
+                    msg, flags = _full_message(client, uid)
+            if msg is None:
                 continue
-            raw = msg_data[0][1]
-            from email import message_from_bytes
-            msg = message_from_bytes(raw)
             date_str = msg.get("Date")
             try:
                 date_iso = parsedate_to_datetime(date_str).isoformat() if date_str else None
             except Exception:
                 date_iso = date_str
-            flags = ""
-            try:
-                t, fdata = client.uid("FETCH", uid, "(FLAGS)")
-                flags = (fdata[0] or b"").decode(errors="replace") if fdata and fdata[0] else ""
-            except Exception:
-                pass
             preview = body_of(msg).strip()[:200]
             messages.append({
                 "uid": uid.decode(),
