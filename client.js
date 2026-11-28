@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
      *   never auto-authorises: each session is one-time use and expires in 60s.
      *
      * USAGE
-     *   const vault = createVaultV1Client();
+     *   const vault = createVaultV1Client({ callerId: 'my-plugin-id' }); // REQUIRED for scoped reads
      *   if (vault.isAvailable()) {
      *     const entries = await vault.query({ category: 'account', title: 'qq' });
      *     const secret = vault.secretOf(entries[0]);  // real password / key value
@@ -50,6 +50,9 @@ window.__ModuleLoader__.load({
     
     function createVaultV1Client(options) {
       options = options || {};
+      // Identity declared by the calling plugin. The vault only returns credentials
+      // whose "accessible plugins" list includes this id. Without it, nothing is returned.
+      var callerId = typeof options.callerId === 'string' && options.callerId.trim() ? options.callerId.trim() : '';
       var win = options.window || (typeof window !== 'undefined' ? window : null);
       var BRIDGE_KEY = '@mysterycode-liwen/dsh-credential-vault/bridge/v1';
     
@@ -136,7 +139,8 @@ window.__ModuleLoader__.load({
               return seal(s, aes, {
                 category: criteria.category || 'all',
                 title: criteria.title || '',
-                limit: criteria.limit || 100
+                limit: criteria.limit || 100,
+                callerId: callerId
               }).then(function (sealed) {
                 return b.query({
                   sessionId: sessionId,
@@ -234,6 +238,7 @@ window.__ModuleLoader__.load({
       badgeTitle: '有新邮件',
       accounts: '账号',
       addAccount: '添加账号',
+      clearForm: '清空表单',
       noAccounts: '还没有账号，添加一个即可开始收发邮件。',
       name: '名称',
       username: '邮箱地址',
@@ -353,8 +358,12 @@ window.__ModuleLoader__.load({
       notifyTestFailed: '测试通知发送失败',
       notifyTitle: '新邮件',
       notifyBody: '封未读新邮件',
+      notifyAnnounceOne: '你有一封{name}发来的邮件请注意查收！',
+      notifyAnnounceMany: '你有{n}封{name}发来的邮件请注意查收！',
+      notifyAnnounceGeneric: '你有{n}封新邮件请注意查收！',
+      notifyUnknownSender: '未知发件人',
       notifyTestTitle: '邮件播报测试',
-      notifyTestBody: '如果你看到桌宠说话，说明新邮件播报已正常工作。',
+      notifyTestBody: '你有一封君莫笑发来的邮件请注意查收！',
       notifyTestTitleSystem: '新邮件通知测试',
       notifyTestBodySystem: '如果你在系统通知中心看到这条消息，说明新邮件通知已正常工作。',
       notifyPetOk: '已让桌宠播报（请留意桌面桌宠）',
@@ -392,6 +401,7 @@ window.__ModuleLoader__.load({
       badgeTitle: 'New mail',
       accounts: 'Accounts',
       addAccount: 'Add account',
+      clearForm: 'Clear form',
       noAccounts: 'No accounts yet. Add one to start sending and receiving mail.',
       name: 'Name',
       username: 'Email address',
@@ -511,8 +521,12 @@ window.__ModuleLoader__.load({
       notifyTestFailed: 'Failed to send test notification',
       notifyTitle: 'New mail',
       notifyBody: 'new unread message(s)',
+      notifyAnnounceOne: 'You have one new email from {name} — please check it!',
+      notifyAnnounceMany: 'You have {n} new emails from {name} — please check them!',
+      notifyAnnounceGeneric: 'You have {n} new emails — please check them!',
+      notifyUnknownSender: 'Unknown sender',
       notifyTestTitle: 'Mail announcement test',
-      notifyTestBody: 'If your desktop pet speaks, new mail announcements are working.',
+      notifyTestBody: 'You have one new email from John — please check it!',
       notifyTestTitleSystem: 'New mail notification test',
       notifyTestBodySystem: 'If you see this message in your notification center, new mail notifications are working.',
       notifyPetOk: 'Asked your desktop pet to announce it (watch the desktop)',
@@ -710,6 +724,14 @@ window.__ModuleLoader__.load({
       gmail: { nameKey: 'gmail', imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465 },
       custom: { nameKey: 'custom', imapHost: '', imapPort: 993, smtpHost: '', smtpPort: 465 },
     };
+
+    // A fresh, fully-empty account form. Account ids are derived from the
+    // username, so the form MUST be reset between accounts — otherwise a
+    // second "add" silently reuses the previous username's id and overwrites
+    // the first account (which looks like the list only ever shows one).
+    function emptyAccountForm() {
+      return { preset: 'qq', name: '', username: '', authCode: '', imapHost: PRESETS.qq.imapHost, imapPort: 993, smtpHost: PRESETS.qq.smtpHost, smtpPort: 465 };
+    }
 
     // Module-level store survives MailPanel unmount/remount when the user
     // switches sidebar panels, so coming back never refetches everything.
@@ -1028,11 +1050,9 @@ window.__ModuleLoader__.load({
               fresh = md.messages.filter(m => !prevSet.has(String(m.uid)));
             }
             if (fresh.length > 0) {
-              const latest = fresh[0] || {};
-              const who = acc.name ? acc.name + '：' : '';
               const res = await deliverAlert(
                 t('notifyTitle'),
-                who + (latest.subject || t('noSubject')) + ' · ' + fresh.length + ' ' + t('notifyBody'),
+                newMailAnnouncement(fresh),
                 { tag: 'dsh-mail-new' }
               );
               NOTIFY.diag.alerts += 1;
@@ -1193,6 +1213,36 @@ window.__ModuleLoader__.load({
       if (!email || email.indexOf('@') < 1) return null;
       return { name, email: email.toLowerCase() };
     }
+    // Resolve a human-friendly sender name for the spoken alert: prefer the
+    // display name in the From header, then a locally saved contact, then the
+    // address local-part. Never fall back to the account's own name.
+    function senderName(raw) {
+      const addr = parseAddress(raw);
+      if (!addr) {
+        const s = String(raw || '').replace(/<.*>/, '').trim();
+        return s || t('notifyUnknownSender');
+      }
+      if (addr.name) return addr.name.trim();
+      const contact = (PERSIST.contacts || []).find(c => String(c.email || '').trim().toLowerCase() === addr.email);
+      if (contact && contact.name) return String(contact.name).trim();
+      return addr.email.split('@')[0] || t('notifyUnknownSender');
+    }
+    // Fixed, readable voice line: only WHO sent and HOW MANY. The subject and
+    // the mailbox account name are deliberately never spoken.
+    function newMailAnnouncement(fresh) {
+      const list = Array.isArray(fresh) ? fresh : [];
+      const names = [];
+      list.forEach(m => {
+        const n = senderName(m && m.from);
+        if (names.indexOf(n) < 0) names.push(n);
+      });
+      const count = list.length;
+      if (names.length === 1) {
+        const key = count === 1 ? 'notifyAnnounceOne' : 'notifyAnnounceMany';
+        return t(key).replace('{name}', names[0]).replace('{n}', String(count));
+      }
+      return t('notifyAnnounceGeneric').replace('{n}', String(count));
+    }
     function fmtDate(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -1284,10 +1334,10 @@ window.__ModuleLoader__.load({
       // time React re-rendered the panel and allow duplicate IMAP sessions.
       const inflightRef = useRef({ messages: null, sent: null, contacts: null });
       const [flash, setFlash] = useState(null);
-      const [form, setForm] = usePersistent('form', { preset: 'qq', name: '', username: '', authCode: '', imapHost: PRESETS.qq.imapHost, imapPort: 993, smtpHost: PRESETS.qq.smtpHost, smtpPort: 465 });
+      const [form, setForm] = usePersistent('form', emptyAccountForm());
       // Credential-vault bridge (no-op if the vault plugin is not installed).
       const vaultClientRef = useRef(null);
-      if (!vaultClientRef.current) vaultClientRef.current = createVaultV1Client();
+      if (!vaultClientRef.current) vaultClientRef.current = createVaultV1Client({ callerId: 'dsh-mail' });
       const [vaultOpen, setVaultOpen] = useState(false);
       const [vaultEntries, setVaultEntries] = useState(null);
       const [vaultBusy, setVaultBusy] = useState(false);
@@ -1575,7 +1625,10 @@ window.__ModuleLoader__.load({
             smtpPort: Number(form.smtpPort),
           });
           notify('success', t('ok'));
-          setForm(Object.assign({}, form, { authCode: '' }));
+          // Reset the WHOLE form, not just authCode: the account id is the
+          // hash of the username, so keeping the old username would make the
+          // next account overwrite this one.
+          setForm(emptyAccountForm());
           await refreshAccounts();
           setView('inbox');
         } catch (e) {
@@ -2090,7 +2143,15 @@ window.__ModuleLoader__.load({
                   )
             )),
             h('div', { className: 'dsh-mail-card' },
-              h('div', { className: 'dsh-mail-cardhead' }, h(Ico, { name: 'plus', size: 16 }), t('addAccount')),
+              h('div', { className: 'dsh-mail-cardhead' },
+                h(Ico, { name: 'plus', size: 16 }), t('addAccount'),
+                h('button', {
+                  className: 'dsh-mail-btn', type: 'button',
+                  style: { marginLeft: 'auto' },
+                  onClick: () => setForm(emptyAccountForm()),
+                  title: t('clearForm'),
+                }, h(Ico, { name: 'refresh', size: 14 }), t('clearForm'))
+              ),
               h('div', { className: 'dsh-mail-hint', style: { marginBottom: 12 } }, t('note')),
               h('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 } },
                 Object.keys(PRESETS).map(k => h('button', {
